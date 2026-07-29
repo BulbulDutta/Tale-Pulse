@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Speech bubble -->
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M30,28h48c5.52,0 10,4.48 10,10v26c0,5.52 -4.48,10 -10,10h-28l-14,12v-12h-6c-5.52,0 -10,-4.48 -10,-10v-26c0,-5.52 4.48,-10 10,-10z" />
+    <!-- Pulse waveform inside -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M38,48h4v12h-4zM46,42h4v24h-4zM54,36h4v36h-4zM62,44h4v20h-4zM70,48h4v12h-4z" />
+</vector>

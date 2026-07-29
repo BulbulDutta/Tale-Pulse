@@ -1,0 +1,6 @@
+{
+  "name": "Tale Pulse",
+  "description": "A sleek, WhatsApp-inspired messaging application featuring email-based backend logic, QR code friend additions, 1-on-1 and group chats with media attachments, and audio/video calling UI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
