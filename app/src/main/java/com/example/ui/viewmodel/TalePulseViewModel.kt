@@ -17,6 +17,7 @@ import com.example.data.model.AuthState
 import com.example.data.model.CallType
 import com.example.data.model.UserStatusGroup
 import com.example.data.repository.TalePulseRepository
+import com.example.util.LinkoCallSignalingEngine
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -115,7 +116,7 @@ class TalePulseViewModel(application: Application) : AndroidViewModel(applicatio
     private val _activeCallState = MutableStateFlow<ActiveCallState?>(null)
     val activeCallState: StateFlow<ActiveCallState?> = _activeCallState.asStateFlow()
 
-    private val prefs = application.getSharedPreferences("talepulse_settings", android.content.Context.MODE_PRIVATE)
+    private val prefs = application.getSharedPreferences("linko_settings", android.content.Context.MODE_PRIVATE)
 
     private val _isDarkMode = MutableStateFlow(prefs.getBoolean("is_dark_mode", true))
     val isDarkMode: StateFlow<Boolean> = _isDarkMode.asStateFlow()
@@ -151,10 +152,50 @@ class TalePulseViewModel(application: Application) : AndroidViewModel(applicatio
     private val _customWallpaperScale = MutableStateFlow(prefs.getString("custom_wallpaper_scale", "CROP") ?: "CROP")
     val customWallpaperScale: StateFlow<String> = _customWallpaperScale.asStateFlow()
 
+    private val _appLanguage = MutableStateFlow(
+        com.example.util.AppLanguage.fromCode(
+            prefs.getString("app_language", com.example.util.AppLanguage.ENGLISH.code) ?: com.example.util.AppLanguage.ENGLISH.code
+        )
+    )
+    val appLanguage: StateFlow<com.example.util.AppLanguage> = _appLanguage.asStateFlow()
+
+    private val _translatedMessages = MutableStateFlow<Map<String, String>>(emptyMap())
+    val translatedMessages: StateFlow<Map<String, String>> = _translatedMessages.asStateFlow()
+
     private val _actionStatusMessage = MutableStateFlow<String?>(null)
     val actionStatusMessage: StateFlow<String?> = _actionStatusMessage.asStateFlow()
 
     private var callTimerJob: Job? = null
+
+    fun setAppLanguage(language: com.example.util.AppLanguage) {
+        _appLanguage.value = language
+        prefs.edit().putString("app_language", language.code).apply()
+        _actionStatusMessage.value = "App language updated to ${language.nativeName}"
+        translateActiveChatMessages()
+    }
+
+    fun translateActiveChatMessages() {
+        val messages = activeMessages.value
+        val lang = _appLanguage.value
+        if (messages.isEmpty() || lang == com.example.util.AppLanguage.ENGLISH) {
+            return
+        }
+
+        viewModelScope.launch {
+            val currentMap = _translatedMessages.value.toMutableMap()
+            for (msg in messages) {
+                if (msg.text.isNotBlank()) {
+                    val cacheKey = "${msg.id}_${lang.code}"
+                    if (!currentMap.containsKey(cacheKey)) {
+                        val translatedText = com.example.util.LocalizationManager.translateChatMessage(msg.text, lang)
+                        currentMap[cacheKey] = translatedText
+                        currentMap[msg.id] = translatedText
+                    }
+                }
+            }
+            _translatedMessages.value = currentMap
+        }
+    }
 
     fun toggleDarkMode() {
         val newValue = !_isDarkMode.value
@@ -187,6 +228,9 @@ class TalePulseViewModel(application: Application) : AndroidViewModel(applicatio
         _actionStatusMessage.value = "Custom wallpaper applied!"
     }
 
+    private val _onlineUserEmails = MutableStateFlow<Set<String>>(setOf("gemini_ai@google.com", "gemini.ai@google.com"))
+    val onlineUserEmails: StateFlow<Set<String>> = _onlineUserEmails.asStateFlow()
+
     init {
         viewModelScope.launch {
             repository.seedSampleDataIfEmpty()
@@ -195,9 +239,49 @@ class TalePulseViewModel(application: Application) : AndroidViewModel(applicatio
             currentUser.collect { user ->
                 if (user != null) {
                     repository.syncContactsWithFirestore(user.email)
+                    com.example.data.remote.FirestorePresenceService.updatePresence(user.email, user.id, true)
                 }
             }
         }
+        viewModelScope.launch {
+            combine(activeMessages, appLanguage) { msgs, lang -> Pair(msgs, lang) }
+                .collect { (msgs, lang) ->
+                    if (lang != com.example.util.AppLanguage.ENGLISH && msgs.isNotEmpty()) {
+                        translateActiveChatMessages()
+                    }
+                }
+        }
+        com.example.data.remote.FirestorePresenceService.startListeningToPresence(viewModelScope) { onlineSet ->
+            _onlineUserEmails.value = onlineSet
+        }
+    }
+
+    fun setAppForegroundState(isForeground: Boolean) {
+        val user = currentUser.value ?: return
+        viewModelScope.launch {
+            com.example.data.remote.FirestorePresenceService.updatePresence(user.email, user.id, isForeground)
+        }
+    }
+
+    fun isUserOnline(email: String?): Boolean {
+        if (email.isNullOrBlank()) return false
+        val normalized = email.lowercase().trim()
+        if (normalized.contains("gemini")) return true
+        return _onlineUserEmails.value.contains(normalized)
+    }
+
+    fun isChatOnline(chat: ChatEntity?): Boolean {
+        if (chat == null) return false
+        if (chat.isGroup) return false
+        if (chat.id == "chat_gemini_ai" || chat.name.contains("Gemini")) return true
+
+        val matchedContact = contacts.value.find { "chat_${it.contactUserId}" == chat.id || it.contactDisplayName.equals(chat.name, ignoreCase = true) }
+        return if (matchedContact != null) isUserOnline(matchedContact.contactEmail) else isUserOnline(chat.name)
+    }
+
+    fun getContactForChat(chat: ChatEntity?): ContactEntity? {
+        if (chat == null) return null
+        return contacts.value.find { "chat_${it.contactUserId}" == chat.id || it.contactDisplayName.equals(chat.name, ignoreCase = true) }
     }
 
     fun loginOrRegister(email: String, displayName: String, username: String) {
@@ -220,13 +304,40 @@ class TalePulseViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun selectChat(chatId: String) {
         _selectedChatId.value = chatId
+        val me = currentUser.value
         viewModelScope.launch {
-            repository.clearChatUnread(chatId)
+            if (me != null) {
+                repository.markChatMessagesAsRead(chatId, me.id)
+            } else {
+                repository.clearChatUnread(chatId)
+            }
+        }
+    }
+
+    fun markChatMessagesAsRead(chatId: String) {
+        val me = currentUser.value ?: return
+        viewModelScope.launch {
+            repository.markChatMessagesAsRead(chatId, me.id)
         }
     }
 
     fun clearSelectedChat() {
         _selectedChatId.value = null
+    }
+
+    fun clearChatHistory(chatId: String) {
+        viewModelScope.launch {
+            repository.clearChatHistory(chatId)
+            _actionStatusMessage.value = "Chat history cleared"
+        }
+    }
+
+    fun deleteChat(chatId: String) {
+        viewModelScope.launch {
+            repository.deleteChat(chatId)
+            _selectedChatId.value = null
+            _actionStatusMessage.value = "Chat deleted"
+        }
     }
 
     fun addContactByEmail(email: String, onDone: (Boolean) -> Unit) {
@@ -266,6 +377,26 @@ class TalePulseViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun openOrCreateDirectChat(userId: String, email: String, name: String, onChatReady: () -> Unit) {
+        viewModelScope.launch {
+            val me = currentUser.value ?: return@launch
+            var contact = contacts.value.find { it.contactUserId == userId || it.contactEmail.equals(email, ignoreCase = true) }
+            if (contact == null) {
+                contact = ContactEntity(
+                    id = "contact_$userId",
+                    userEmail = me.email,
+                    contactUserId = userId,
+                    contactEmail = email,
+                    contactDisplayName = name,
+                    contactUsername = email.substringBefore("@")
+                )
+            }
+            val chat = repository.createOrGetDirectChat(me, contact)
+            _selectedChatId.value = chat.id
+            onChatReady()
+        }
+    }
+
     fun openGeminiChat(onChatReady: (String) -> Unit) {
         viewModelScope.launch {
             val me = currentUser.value ?: return@launch
@@ -285,6 +416,28 @@ class TalePulseViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun addGroupMembers(chatId: String, newContacts: List<ContactEntity>) {
+        viewModelScope.launch {
+            val me = currentUser.value ?: return@launch
+            repository.addGroupMembers(chatId, newContacts, me)
+            _actionStatusMessage.value = "Added members to group"
+        }
+    }
+
+    fun toggleAdminRole(chatId: String, memberUserId: String, makeAdmin: Boolean) {
+        viewModelScope.launch {
+            repository.toggleAdminRole(chatId, memberUserId, makeAdmin)
+            _actionStatusMessage.value = if (makeAdmin) "Member promoted to Admin" else "Admin role removed"
+        }
+    }
+
+    fun removeGroupMember(chatId: String, memberUserId: String) {
+        viewModelScope.launch {
+            repository.removeGroupMember(chatId, memberUserId)
+            _actionStatusMessage.value = "Member removed from group"
+        }
+    }
+
     fun sendMessage(
         text: String,
         mediaUri: String? = null,
@@ -297,6 +450,27 @@ class TalePulseViewModel(application: Application) : AndroidViewModel(applicatio
 
         viewModelScope.launch {
             repository.sendMessage(chatId, sender, text, mediaUri, mediaType, formattedRichText)
+        }
+    }
+
+    fun toggleReaction(messageId: String, emoji: String) {
+        val user = currentUser.value ?: return
+        viewModelScope.launch {
+            repository.toggleMessageReaction(messageId, emoji, user.id)
+        }
+    }
+
+    fun deleteMessageForMe(messageId: String) {
+        viewModelScope.launch {
+            repository.deleteMessageForMe(messageId)
+            _actionStatusMessage.value = "Message deleted for you"
+        }
+    }
+
+    fun deleteMessageForEveryone(messageId: String) {
+        viewModelScope.launch {
+            repository.deleteMessageForEveryone(messageId)
+            _actionStatusMessage.value = "Message deleted for everyone"
         }
     }
 
@@ -339,29 +513,77 @@ class TalePulseViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    fun startCall(contactName: String, contactEmail: String, contactAvatar: String?, callType: CallType) {
-        _activeCallState.value = ActiveCallState(
+    fun startCall(
+        contactName: String,
+        contactEmail: String,
+        contactAvatar: String?,
+        callType: CallType,
+        context: Context? = null
+    ) {
+        startGoogleMeetCall(
+            context = context ?: getApplication<Application>().applicationContext,
             contactName = contactName,
             contactEmail = contactEmail,
-            contactAvatarUri = contactAvatar,
-            callType = callType,
-            statusText = "Calling..."
+            contactAvatar = contactAvatar,
+            callType = callType
         )
+    }
 
-        callTimerJob?.cancel()
-        callTimerJob = viewModelScope.launch {
-            delay(1500)
-            _activeCallState.value = _activeCallState.value?.copy(statusText = "Ringing...")
-            delay(2000)
-            _activeCallState.value = _activeCallState.value?.copy(statusText = "Connected")
+    fun startGoogleMeetCall(
+        context: Context,
+        contactName: String,
+        contactEmail: String,
+        contactAvatar: String?,
+        callType: CallType = CallType.VIDEO
+    ) {
+        val meetCode = generateMeetCode()
+        val meetUrl = "https://meet.google.com/$meetCode"
+        val callTypeLabel = if (callType == CallType.VIDEO) "Video Call" else "Audio Call"
 
-            var duration = 0
-            while (_activeCallState.value?.statusText == "Connected") {
-                delay(1000)
-                duration++
-                _activeCallState.value = _activeCallState.value?.copy(callDurationSeconds = duration)
+        // 1. Send Google Meet link into current active chat if available
+        val chatId = _selectedChatId.value
+        val sender = currentUser.value
+        if (chatId != null && sender != null) {
+            viewModelScope.launch {
+                repository.sendMessage(
+                    chatId = chatId,
+                    sender = sender,
+                    text = "📹 Join Google Meet $callTypeLabel: $meetUrl"
+                )
             }
         }
+
+        // 2. Add Call Log entry
+        viewModelScope.launch {
+            repository.addCallLog(
+                contactName = contactName,
+                contactEmail = contactEmail,
+                contactAvatarUri = contactAvatar,
+                callType = callType,
+                isIncoming = false,
+                isMissed = false,
+                durationSeconds = 0
+            )
+        }
+
+        // 3. Launch Google Meet Intent
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(meetUrl)).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            _actionStatusMessage.value = "Launching Google Meet for $contactName..."
+        } catch (e: Exception) {
+            _actionStatusMessage.value = "Google Meet Link Created: $meetUrl"
+        }
+    }
+
+    private fun generateMeetCode(): String {
+        val chars = "abcdefghijklmnopqrstuvwxyz"
+        val p1 = (1..3).map { chars.random() }.joinToString("")
+        val p2 = (1..4).map { chars.random() }.joinToString("")
+        val p3 = (1..3).map { chars.random() }.joinToString("")
+        return "$p1-$p2-$p3"
     }
 
     fun toggleMute() {
@@ -382,6 +604,9 @@ class TalePulseViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun endCall() {
         val currentCall = _activeCallState.value ?: return
+        val signalingEngine = LinkoCallSignalingEngine.getInstance(getApplication())
+        signalingEngine.endCall()
+
         viewModelScope.launch {
             repository.addCallLog(
                 contactName = currentCall.contactName,
@@ -410,6 +635,15 @@ class TalePulseViewModel(application: Application) : AndroidViewModel(applicatio
             )
             repository.updateProfile(updated)
             _actionStatusMessage.value = "Profile updated successfully"
+        }
+    }
+
+    fun updateAvatarUri(avatarUri: String?) {
+        viewModelScope.launch {
+            val user = currentUser.value ?: return@launch
+            val updated = user.copy(avatarUri = avatarUri)
+            repository.updateProfile(updated)
+            _actionStatusMessage.value = if (!avatarUri.isNullOrBlank()) "Profile picture updated!" else "Profile picture removed"
         }
     }
 
@@ -567,7 +801,7 @@ class TalePulseViewModel(application: Application) : AndroidViewModel(applicatio
     fun triggerSimulatedCallNotification(context: Context, isVideo: Boolean = false) {
         val firstContact = contacts.value.firstOrNull()
         val callerName = firstContact?.contactDisplayName ?: currentUser.value?.displayName ?: "Contact"
-        val callerEmail = firstContact?.contactEmail ?: currentUser.value?.email ?: "contact@talepulse.com"
+        val callerEmail = firstContact?.contactEmail ?: currentUser.value?.email ?: "contact@linko.com"
         val callType = if (isVideo) "Video" else "Voice"
 
         com.example.notification.NotificationHelper.showIncomingCallNotification(
@@ -581,7 +815,7 @@ class TalePulseViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun triggerSimulatedFriendRequestNotification(context: Context) {
         val requesterName = "New Connection"
-        val requesterEmail = "invite@talepulse.com"
+        val requesterEmail = "invite@linko.com"
 
         com.example.notification.NotificationHelper.showFriendRequestNotification(
             context = context,

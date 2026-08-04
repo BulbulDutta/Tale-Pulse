@@ -58,8 +58,26 @@ interface ContactDao {
 
 @Dao
 interface ChatDao {
-    @Query("SELECT * FROM chats ORDER BY lastMessageTimestamp DESC")
+    @Query("""
+        SELECT 
+            c.id AS id,
+            c.isGroup AS isGroup,
+            c.name AS name,
+            c.groupDescription AS groupDescription,
+            c.groupIconUri AS groupIconUri,
+            c.participantIdsJson AS participantIdsJson,
+            c.adminIdsJson AS adminIdsJson,
+            c.lastMessageText AS lastMessageText,
+            MAX(c.lastMessageTimestamp, COALESCE((SELECT MAX(m.timestamp) FROM messages m WHERE m.chatId = c.id), 0)) AS lastMessageTimestamp,
+            c.unreadCount AS unreadCount
+        FROM chats c
+        GROUP BY c.id
+        ORDER BY lastMessageTimestamp DESC
+    """)
     fun getAllChatsFlow(): Flow<List<ChatEntity>>
+
+    @Query("SELECT * FROM chats ORDER BY lastMessageTimestamp DESC")
+    suspend fun getAllChatsList(): List<ChatEntity>
 
     @Query("SELECT * FROM chats WHERE id = :chatId LIMIT 1")
     suspend fun getChatById(chatId: String): ChatEntity?
@@ -69,6 +87,9 @@ interface ChatDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrUpdateChat(chat: ChatEntity)
+
+    @Query("DELETE FROM chats WHERE id = :chatId")
+    suspend fun deleteChatById(chatId: String)
 
     @Query("UPDATE chats SET lastMessageText = :text, lastMessageTimestamp = :timestamp WHERE id = :chatId")
     suspend fun updateLastMessage(chatId: String, text: String, timestamp: Long)
@@ -93,6 +114,21 @@ interface MessageDao {
 
     @Query("UPDATE messages SET emailTransportStatus = :emailStatus WHERE id = :messageId")
     suspend fun updateEmailTransportStatus(messageId: String, emailStatus: String)
+
+    @Query("UPDATE messages SET reactionsJson = :reactionsJson WHERE id = :messageId")
+    suspend fun updateMessageReactions(messageId: String, reactionsJson: String)
+
+    @Query("DELETE FROM messages WHERE id = :messageId")
+    suspend fun deleteMessageById(messageId: String)
+
+    @Query("UPDATE messages SET text = :deletedText, mediaUri = NULL, mediaType = NULL, formattedRichText = NULL WHERE id = :messageId")
+    suspend fun markMessageAsDeletedForEveryone(messageId: String, deletedText: String = "🚫 This message was deleted")
+
+    @Query("DELETE FROM messages WHERE chatId = :chatId")
+    suspend fun deleteMessagesForChat(chatId: String)
+
+    @Query("UPDATE messages SET status = 'READ' WHERE chatId = :chatId AND senderId != :currentUserId AND status != 'READ'")
+    suspend fun markUnreadMessagesAsRead(chatId: String, currentUserId: String)
 }
 
 @Dao

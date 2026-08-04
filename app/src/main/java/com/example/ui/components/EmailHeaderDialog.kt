@@ -61,7 +61,7 @@ fun EmailHeaderDialog(
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    text = "This Tale Pulse message was dispatched and mirrored over secure email infrastructure.",
+                    text = "This Linko message was dispatched and mirrored over secure email infrastructure.",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

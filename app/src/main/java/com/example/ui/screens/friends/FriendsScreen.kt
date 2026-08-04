@@ -1,5 +1,6 @@
 package com.example.ui.screens.friends
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -28,6 +29,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -51,6 +53,7 @@ import com.example.ui.theme.Emerald500
 @Composable
 fun FriendsScreen(
     contacts: List<ContactEntity>,
+    isUserOnline: (String?) -> Boolean = { false },
     onOpenChat: (ContactEntity) -> Unit,
     onStartCall: (contactName: String, contactEmail: String, contactAvatar: String?, callType: CallType) -> Unit,
     onAddContactClick: () -> Unit,
@@ -185,8 +188,10 @@ fun FriendsScreen(
                         .padding(vertical = 4.dp)
                 ) {
                     items(filteredContacts, key = { it.id }) { contact ->
+                        val isOnline = isUserOnline(contact.contactEmail)
                         ContactItemRow(
                             contact = contact,
+                            isOnline = isOnline,
                             onChatClick = { onOpenChat(contact) },
                             onAudioCallClick = {
                                 onStartCall(
@@ -215,10 +220,16 @@ fun FriendsScreen(
 @Composable
 private fun ContactItemRow(
     contact: ContactEntity,
+    isOnline: Boolean = false,
     onChatClick: () -> Unit,
     onAudioCallClick: () -> Unit,
     onVideoCallClick: () -> Unit
 ) {
+    val context = LocalContext.current
+    val isAiBot = contact.contactUserId == "user_gemini" ||
+            contact.contactEmail.contains("gemini", ignoreCase = true) ||
+            contact.contactDisplayName.contains("Gemini", ignoreCase = true)
+
     Card(
         shape = RoundedCornerShape(0.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -232,7 +243,13 @@ private fun ContactItemRow(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            UserAvatar(name = contact.contactDisplayName, size = 48.dp)
+            UserAvatar(
+                name = contact.contactDisplayName,
+                avatarUri = contact.contactAvatarUri,
+                size = 48.dp,
+                showOnlineStatus = true,
+                isOnline = isOnline
+            )
 
             Spacer(modifier = Modifier.width(14.dp))
 
@@ -265,21 +282,44 @@ private fun ContactItemRow(
                         modifier = Modifier.size(20.dp)
                     )
                 }
-                IconButton(onClick = onAudioCallClick) {
-                    Icon(
-                        imageVector = Icons.Default.Call,
-                        contentDescription = "Call",
-                        tint = Emerald500,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-                IconButton(onClick = onVideoCallClick) {
-                    Icon(
-                        imageVector = Icons.Default.Videocam,
-                        contentDescription = "Video",
-                        tint = Emerald500,
-                        modifier = Modifier.size(20.dp)
-                    )
+                if (!isAiBot) {
+                    IconButton(onClick = onAudioCallClick) {
+                        Icon(
+                            imageVector = Icons.Default.Call,
+                            contentDescription = "Call",
+                            tint = Emerald500,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    IconButton(onClick = onVideoCallClick) {
+                        Icon(
+                            imageVector = Icons.Default.Videocam,
+                            contentDescription = "Video",
+                            tint = Emerald500,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                } else {
+                    IconButton(onClick = {
+                        Toast.makeText(context, "Calling is not supported for AI Assistant. Please type your message.", Toast.LENGTH_SHORT).show()
+                    }) {
+                        Icon(
+                            imageVector = Icons.Default.Call,
+                            contentDescription = "Call (Disabled for AI)",
+                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    IconButton(onClick = {
+                        Toast.makeText(context, "Calling is not supported for AI Assistant. Please type your message.", Toast.LENGTH_SHORT).show()
+                    }) {
+                        Icon(
+                            imageVector = Icons.Default.Videocam,
+                            contentDescription = "Video (Disabled for AI)",
+                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
             }
         }

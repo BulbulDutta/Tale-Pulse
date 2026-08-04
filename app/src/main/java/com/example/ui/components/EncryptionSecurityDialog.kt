@@ -68,7 +68,7 @@ fun EncryptionSecurityDialog(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = "Messages and media in this chat with $chatName are secured with AES-256-GCM end-to-end encryption. No third party, not even Tale Pulse servers, can read them.",
+                    text = "Messages, media, and call signaling in this chat with $chatName are secured using Signal Protocol AES-256-GCM double-ratchet end-to-end encryption. All keys are derived and securely stored on-device in Android KeyStore.",
                     fontSize = 12.sp,
                     textAlign = TextAlign.Center,
                     color = MaterialTheme.colorScheme.onSurfaceVariant

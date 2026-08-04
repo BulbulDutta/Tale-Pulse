@@ -11,7 +11,7 @@ data class UserEntity(
     val displayName: String,
     val avatarUri: String? = null,
     val qrPayload: String,
-    val statusMessage: String = "Hey there! I am using Tale Pulse.",
+    val statusMessage: String = "Hey there! I am using Linko.",
     val isCurrentUser: Boolean = false
 )
 
@@ -36,6 +36,7 @@ data class ChatEntity(
     val groupDescription: String? = null,
     val groupIconUri: String? = null,
     val participantIdsJson: String, // e.g. ["id1", "id2"]
+    val adminIdsJson: String = "[]", // e.g. ["id1"]
     val lastMessageText: String = "",
     val lastMessageTimestamp: Long = System.currentTimeMillis(),
     val unreadCount: Int = 0
@@ -58,7 +59,8 @@ data class MessageEntity(
     val emailSubject: String? = null,
     val emailMessageId: String? = null,
     val isEncrypted: Boolean = true,
-    val encryptionAlgorithm: String = "AES-256-GCM"
+    val encryptionAlgorithm: String = "AES-256-GCM",
+    val reactionsJson: String = "{}"
 )
 
 @Entity(tableName = "call_logs")

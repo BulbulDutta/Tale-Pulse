@@ -19,6 +19,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.painterResource
+import com.example.R
 import com.example.ui.theme.Emerald500
 import com.example.ui.theme.Slate900
 import com.google.zxing.BarcodeFormat
@@ -61,19 +63,18 @@ fun QrCodeGenerator(
             )
         }
 
-        // Center Tale Pulse Icon Badge
+        // Center Linko Leaf Icon Badge
         Box(
             modifier = Modifier
                 .size(38.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .background(Emerald500),
+                .background(Color.White),
             contentAlignment = Alignment.Center
         ) {
-            Icon(
-                imageVector = Icons.Default.QrCode2,
-                contentDescription = "Tale Pulse QR",
-                tint = Color.White,
-                modifier = Modifier.size(22.dp)
+            Image(
+                painter = painterResource(id = R.drawable.ic_linko_logo),
+                contentDescription = "Linko QR Logo",
+                modifier = Modifier.size(26.dp)
             )
         }
     }

@@ -191,9 +191,16 @@ fun CameraQrScanner(
                                         for (barcode in barcodes) {
                                             val rawValue = barcode.rawValue
                                             if (!rawValue.isNullOrEmpty() && !isHasScanned) {
-                                                isHasScanned = true
-                                                onQrScanned(rawValue)
-                                                break
+                                                val trimmed = rawValue.trim()
+                                                val isValidLinko = trimmed.startsWith("linko://user", ignoreCase = true) ||
+                                                        trimmed.startsWith("talepulse://user", ignoreCase = true)
+                                                if (isValidLinko) {
+                                                    isHasScanned = true
+                                                    onQrScanned(rawValue)
+                                                    break
+                                                } else {
+                                                    android.widget.Toast.makeText(ctx, "Invalid Linko QR Code", android.widget.Toast.LENGTH_SHORT).show()
+                                                }
                                             }
                                         }
                                     }
@@ -255,7 +262,7 @@ fun CameraQrScanner(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Allow camera access to scan Tale Pulse QR codes live.",
+                    text = "Allow camera access to scan Linko QR codes live.",
                     color = Color.LightGray,
                     fontSize = 14.sp
                 )
@@ -369,7 +376,7 @@ fun CameraQrScanner(
                 text = {
                     Column {
                         Text(
-                            "Enter a Tale Pulse QR code URI or email address:",
+                            "Enter a Linko QR code URI or email address:",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -377,7 +384,7 @@ fun CameraQrScanner(
                         OutlinedTextField(
                             value = manualInput,
                             onValueChange = { manualInput = it },
-                            placeholder = { Text("talepulse://user?email=friend@example.com") },
+                            placeholder = { Text("linko://user?email=friend@example.com") },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true
                         )

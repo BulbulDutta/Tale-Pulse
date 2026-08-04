@@ -39,7 +39,7 @@ data class EmailHeaderInfo(
     val to: String,
     val subject: String,
     val messageId: String,
-    val smtpRoute: String = "smtp.talepulse.net (TLS 1.3 encrypted)",
+    val smtpRoute: String = "smtp.linko.net (TLS 1.3 encrypted)",
     val timestampFormatted: String,
     val status: String
 )

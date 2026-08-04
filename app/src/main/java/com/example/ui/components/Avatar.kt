@@ -18,10 +18,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.example.ui.theme.Emerald500
 import com.example.ui.theme.Teal500
 
@@ -29,10 +31,11 @@ import com.example.ui.theme.Teal500
 fun UserAvatar(
     name: String,
     modifier: Modifier = Modifier,
+    avatarUri: String? = null,
     size: Dp = 48.dp,
     isGroup: Boolean = false,
     showOnlineStatus: Boolean = true,
-    isOnline: Boolean = true
+    isOnline: Boolean = false
 ) {
     val initial = name.firstOrNull()?.uppercase() ?: "T"
     val avatarColors = getAvatarGradients(name)
@@ -41,37 +44,48 @@ fun UserAvatar(
         modifier = modifier.size(size),
         contentAlignment = Alignment.Center
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .clip(CircleShape)
-                .background(Brush.linearGradient(avatarColors)),
-            contentAlignment = Alignment.Center
-        ) {
-            if (isGroup) {
-                Icon(
-                    imageVector = Icons.Default.Group,
-                    contentDescription = "Group",
-                    tint = Color.White,
-                    modifier = Modifier.size(size * 0.5f)
-                )
-            } else {
-                Text(
-                    text = initial,
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = (size.value * 0.45f).sp
-                )
+        if (!avatarUri.isNullOrBlank()) {
+            AsyncImage(
+                model = avatarUri,
+                contentDescription = name,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape)
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape)
+                    .background(Brush.linearGradient(avatarColors)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (isGroup) {
+                    Icon(
+                        imageVector = Icons.Default.Group,
+                        contentDescription = "Group",
+                        tint = Color.White,
+                        modifier = Modifier.size(size * 0.5f)
+                    )
+                } else {
+                    Text(
+                        text = initial,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = (size.value * 0.45f).sp
+                    )
+                }
             }
         }
 
-        if (showOnlineStatus && !isGroup) {
+        if (showOnlineStatus && !isGroup && isOnline) {
             Box(
                 modifier = Modifier
                     .size(size * 0.28f)
                     .align(Alignment.BottomEnd)
                     .clip(CircleShape)
-                    .background(if (isOnline) Emerald500 else Color.Gray)
+                    .background(Emerald500)
                     .border(2.dp, MaterialTheme.colorScheme.surface, CircleShape)
             )
         }

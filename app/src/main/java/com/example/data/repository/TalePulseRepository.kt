@@ -37,7 +37,22 @@ class TalePulseRepository(
     private val ioScope = CoroutineScope(Dispatchers.IO)
 
     val currentUserFlow: Flow<UserEntity?> = userDao.getCurrentUserFlow()
-    val allChatsFlow: Flow<List<ChatEntity>> = chatDao.getAllChatsFlow()
+    val allChatsFlow: Flow<List<ChatEntity>> = chatDao.getAllChatsFlow().map { chatList ->
+        // Deduplicate conversations so each contact or group appears ONLY ONCE
+        chatList
+            .groupBy { chat ->
+                if (chat.isGroup) {
+                    chat.id
+                } else {
+                    chat.name.lowercase().trim()
+                }
+            }
+            .map { (_, duplicates) ->
+                // Aggregate and select the thread with the MAX(timestamp) / newest message
+                duplicates.maxByOrNull { it.lastMessageTimestamp }!!
+            }
+            .sortedByDescending { it.lastMessageTimestamp }
+    }
     val allCallLogsFlow: Flow<List<CallLogEntity>> = callLogDao.getAllCallLogsFlow()
     val activeStatusesFlow: Flow<List<StatusEntity>> = statusDao.getActiveStatusesFlow(System.currentTimeMillis())
 
@@ -53,6 +68,16 @@ class TalePulseRepository(
                 msg.copy(text = plain)
             }
         }
+    }
+
+    suspend fun clearChatHistory(chatId: String) {
+        messageDao.deleteMessagesForChat(chatId)
+        chatDao.updateLastMessage(chatId, "Chat history cleared", System.currentTimeMillis())
+    }
+
+    suspend fun deleteChat(chatId: String) {
+        messageDao.deleteMessagesForChat(chatId)
+        chatDao.deleteChatById(chatId)
     }
 
     fun getChatByIdFlow(chatId: String): Flow<ChatEntity?> {
@@ -113,7 +138,7 @@ class TalePulseRepository(
             id = "c_gemini",
             userEmail = me.email,
             contactUserId = "user_gemini",
-            contactEmail = "gemini.ai@talepulse.com",
+            contactEmail = "gemini.ai@linko.com",
             contactDisplayName = "Gemini AI Assistant",
             contactUsername = "gemini_ai",
             contactStatus = "Powered by Gemini 3.5 Flash • Ask me anything! ✨"
@@ -125,24 +150,24 @@ class TalePulseRepository(
             isGroup = false,
             name = "Gemini AI Assistant",
             participantIdsJson = "[\"${me.id}\", \"user_gemini\"]",
-            lastMessageText = "Hello! I'm Gemini, your AI assistant on Tale Pulse. Ask me anything! ✨",
+            lastMessageText = "Hello! I'm Gemini, your AI assistant on Linko. Ask me anything! ✨",
             lastMessageTimestamp = System.currentTimeMillis()
         )
         chatDao.insertOrUpdateChat(newGeminiChat)
 
-        val welcomeText = "Hello! 👋 I'm your Gemini AI Assistant on Tale Pulse.\n\nAsk me questions, draft messages, analyze attached images, or summarize conversations! ✨"
+        val welcomeText = "Hello! 👋 I'm your Gemini AI Assistant on Linko.\n\nAsk me questions, draft messages, analyze attached images, or summarize conversations! ✨"
         val welcomeMessage = MessageEntity(
             id = "m_gemini_welcome",
             chatId = "chat_gemini_ai",
             senderId = "user_gemini",
             senderName = "Gemini AI Assistant",
-            senderEmail = "gemini.ai@talepulse.com",
+            senderEmail = "gemini.ai@linko.com",
             text = EncryptionManager.encrypt(welcomeText, "chat_gemini_ai"),
             timestamp = System.currentTimeMillis(),
             status = "READ",
             emailTransportStatus = "DELIVERED_INBOX",
-            emailSubject = "Welcome to Gemini AI on Tale Pulse",
-            emailMessageId = "<gemini-welcome@talepulse.net>",
+            emailSubject = "Welcome to Gemini AI on Linko",
+            emailMessageId = "<gemini-welcome@linko.net>",
             isEncrypted = true,
             encryptionAlgorithm = "AES-256-GCM"
         )
@@ -170,8 +195,8 @@ class TalePulseRepository(
                 username = if (username.isBlank()) email.substringBefore("@") else username.trim(),
                 displayName = if (displayName.isBlank()) email.substringBefore("@") else displayName.trim(),
                 avatarUri = null,
-                qrPayload = "talepulse://user?email=${email.trim()}&id=$newUserId",
-                statusMessage = "Hey! I am using Tale Pulse.",
+                qrPayload = "linko://user?email=${email.trim()}&id=$newUserId",
+                statusMessage = "Hey! I am using Linko.",
                 isCurrentUser = true
             )
             userDao.insertUser(newUser)
@@ -192,64 +217,172 @@ class TalePulseRepository(
             return Result.failure(IllegalArgumentException("Please enter a valid email address."))
         }
 
-        val existing = contactDao.getContactByEmail(ownerEmail, trimmed)
+        val cleanOwner = ownerEmail.lowercase().trim()
+        val cleanContactEmail = trimmed.lowercase().trim()
+
+        if (cleanContactEmail == cleanOwner) {
+            return Result.failure(IllegalArgumentException("You cannot add yourself as a contact."))
+        }
+
+        val existing = contactDao.getContactByEmail(cleanOwner, cleanContactEmail)
         if (existing != null) {
             FirestoreContactService.uploadContact(existing)
             return Result.success(existing)
         }
 
-        val contactName = trimmed.substringBefore("@").replace(".", " ").capitalizeWords()
+        val contactName = cleanContactEmail.substringBefore("@").replace(".", " ").capitalizeWords()
+        val recipientUserId = "user_${UUID.randomUUID().toString().take(8)}"
+
         val newContact = ContactEntity(
             id = "c_${UUID.randomUUID().toString().take(8)}",
-            userEmail = ownerEmail,
-            contactUserId = "user_${UUID.randomUUID().toString().take(8)}",
-            contactEmail = trimmed,
+            userEmail = cleanOwner,
+            contactUserId = recipientUserId,
+            contactEmail = cleanContactEmail,
             contactDisplayName = contactName,
-            contactUsername = trimmed.substringBefore("@"),
+            contactUsername = cleanContactEmail.substringBefore("@"),
             contactStatus = "Added via Email Connection"
         )
         contactDao.insertContact(newContact)
         FirestoreContactService.uploadContact(newContact)
+
+        // Bidirectional pairing: ensure recipient also has owner as contact
+        val ownerUser = userDao.getUserByEmail(cleanOwner)
+        if (ownerUser != null) {
+            val reciprocalContact = ContactEntity(
+                id = "c_${UUID.randomUUID().toString().take(8)}",
+                userEmail = cleanContactEmail,
+                contactUserId = ownerUser.id,
+                contactEmail = ownerUser.email,
+                contactDisplayName = ownerUser.displayName,
+                contactUsername = ownerUser.username,
+                contactAvatarUri = ownerUser.avatarUri,
+                contactStatus = "Added via Email Connection",
+                addedTimestamp = System.currentTimeMillis()
+            )
+            contactDao.insertContact(reciprocalContact)
+            FirestoreContactService.uploadContact(reciprocalContact)
+            createOrGetDirectChat(ownerUser, newContact)
+        }
+
         return Result.success(newContact)
     }
 
     suspend fun addContactFromQrPayload(ownerEmail: String, qrPayload: String): Result<ContactEntity> {
+        val trimmed = qrPayload.trim()
+
+        // Strict Linko URI schema validation
+        val isValidLinkoSchema = trimmed.startsWith("linko://user", ignoreCase = true) ||
+                trimmed.startsWith("talepulse://user", ignoreCase = true)
+
+        if (!isValidLinkoSchema) {
+            return Result.failure(IllegalArgumentException("Invalid Linko QR Code"))
+        }
+
         var email = ""
         var qrUserId = ""
         var displayName = ""
+        var avatarUri: String? = null
 
-        val trimmed = qrPayload.trim()
+        if (trimmed.startsWith("linko://user/") || trimmed.startsWith("talepulse://user/")) {
+            val pathPart = trimmed.substringAfter("://user/").substringBefore("?").substringBefore("&")
+            if (pathPart.isNotBlank()) {
+                qrUserId = pathPart
+            }
+        }
 
-        if (trimmed.startsWith("talepulse://user") || trimmed.contains("email=")) {
+        if (trimmed.contains("email=") || trimmed.contains("id=") || trimmed.contains("name=") || trimmed.contains("avatar=")) {
             email = trimmed.substringAfter("email=", "").substringBefore("&")
-            qrUserId = trimmed.substringAfter("id=", "").substringBefore("&")
-            displayName = trimmed.substringAfter("name=", "").substringBefore("&")
+            if (qrUserId.isBlank()) {
+                qrUserId = trimmed.substringAfter("id=", "").substringBefore("&")
+            }
+            displayName = trimmed.substringAfter("name=", "").substringBefore("&").ifBlank {
+                trimmed.substringAfter("displayName=", "").substringBefore("&")
+            }
+            avatarUri = trimmed.substringAfter("avatar=", "").substringBefore("&").ifBlank {
+                trimmed.substringAfter("avatarUri=", "").substringBefore("&")
+            }.ifBlank { null }
         } else if (trimmed.startsWith("{")) {
             try {
                 val json = org.json.JSONObject(trimmed)
                 email = json.optString("email", "")
-                qrUserId = json.optString("id", "")
+                if (qrUserId.isBlank()) qrUserId = json.optString("id", "")
                 displayName = json.optString("displayName", json.optString("name", ""))
+                avatarUri = json.optString("avatarUri", json.optString("avatar", "")).ifBlank { null }
             } catch (_: Exception) {}
-        } else if (trimmed.contains("@")) {
-            email = trimmed
+        }
+
+        if (displayName.isNotBlank()) {
+            try {
+                displayName = java.net.URLDecoder.decode(displayName, "UTF-8")
+            } catch (_: Exception) {}
         }
 
         if (email.isBlank()) {
-            return Result.failure(IllegalArgumentException("Could not extract contact email from QR Code payload."))
+            return Result.failure(IllegalArgumentException("Could not extract contact email from Linko QR Code."))
         }
 
-        val result = addContactByEmail(ownerEmail, email)
-        result.onSuccess { contact ->
-            val updated = contact.copy(
-                contactUserId = if (qrUserId.isNotBlank()) qrUserId else contact.contactUserId,
-                contactDisplayName = if (displayName.isNotBlank()) displayName else contact.contactDisplayName,
-                contactStatus = "Scanned & Paired via QR Code 📷"
-            )
-            contactDao.insertContact(updated)
-            FirestoreContactService.uploadContact(updated)
+        val cleanOwner = ownerEmail.lowercase().trim()
+        val cleanContactEmail = email.lowercase().trim()
+
+        if (cleanContactEmail == cleanOwner) {
+            return Result.failure(IllegalArgumentException("You cannot scan and add your own Linko QR code."))
         }
-        return result
+
+        // Look up if recipient user exists in local database (DO NOT update or overwrite local currentUser state)
+        val existingUser = userDao.getUserByEmail(cleanContactEmail)
+        val finalUserId = if (qrUserId.isNotBlank()) qrUserId else (existingUser?.id ?: "user_${UUID.randomUUID().toString().take(8)}")
+        val finalDisplayName = when {
+            displayName.isNotBlank() -> displayName
+            existingUser != null && existingUser.displayName.isNotBlank() -> existingUser.displayName
+            else -> cleanContactEmail.substringBefore("@").replace(".", " ").capitalizeWords()
+        }
+        val finalAvatar = avatarUri ?: existingUser?.avatarUri
+
+        val existingContact = contactDao.getContactByEmail(cleanOwner, cleanContactEmail)
+        val contactToSave = ContactEntity(
+            id = existingContact?.id ?: "c_${UUID.randomUUID().toString().take(8)}",
+            userEmail = cleanOwner,
+            contactUserId = finalUserId,
+            contactEmail = cleanContactEmail,
+            contactDisplayName = finalDisplayName,
+            contactUsername = existingUser?.username ?: cleanContactEmail.substringBefore("@"),
+            contactAvatarUri = finalAvatar,
+            contactStatus = "Scanned & Paired via Linko QR 📷",
+            addedTimestamp = System.currentTimeMillis()
+        )
+
+        contactDao.insertContact(contactToSave)
+        FirestoreContactService.uploadContact(contactToSave)
+
+        // Bidirectional pairing: ensure recipient contact list also incorporates the scanner's details symmetrically
+        val ownerUser = userDao.getUserByEmail(cleanOwner)
+        if (ownerUser != null) {
+            val reciprocalContact = ContactEntity(
+                id = "c_${UUID.randomUUID().toString().take(8)}",
+                userEmail = cleanContactEmail,
+                contactUserId = ownerUser.id,
+                contactEmail = ownerUser.email,
+                contactDisplayName = ownerUser.displayName,
+                contactUsername = ownerUser.username,
+                contactAvatarUri = ownerUser.avatarUri,
+                contactStatus = "Scanned & Paired via Linko QR 📷",
+                addedTimestamp = System.currentTimeMillis()
+            )
+            contactDao.insertContact(reciprocalContact)
+            FirestoreContactService.uploadContact(reciprocalContact)
+
+            createOrGetDirectChat(ownerUser, contactToSave)
+        }
+
+        return Result.success(contactToSave)
+    }
+
+    suspend fun deleteMessageForMe(messageId: String) {
+        messageDao.deleteMessageById(messageId)
+    }
+
+    suspend fun deleteMessageForEveryone(messageId: String) {
+        messageDao.markMessageAsDeletedForEveryone(messageId)
     }
 
     fun syncContactsWithFirestore(ownerEmail: String) {
@@ -275,12 +408,34 @@ class TalePulseRepository(
     suspend fun createOrGetDirectChat(me: UserEntity, contact: ContactEntity): ChatEntity {
         val chatId = "chat_${contact.contactUserId}"
         val existing = chatDao.getChatById(chatId)
-        if (existing != null) return existing
+        if (existing != null) {
+            if (existing.name != contact.contactDisplayName || existing.groupIconUri != contact.contactAvatarUri) {
+                val updatedChat = existing.copy(
+                    name = contact.contactDisplayName,
+                    groupIconUri = contact.contactAvatarUri
+                )
+                chatDao.insertOrUpdateChat(updatedChat)
+                return updatedChat
+            }
+            return existing
+        }
+
+        val existingList = chatDao.getAllChatsList()
+        val matchingByName = existingList.find { !it.isGroup && it.name.equals(contact.contactDisplayName, ignoreCase = true) }
+        if (matchingByName != null) {
+            if (matchingByName.groupIconUri != contact.contactAvatarUri) {
+                val updatedChat = matchingByName.copy(groupIconUri = contact.contactAvatarUri)
+                chatDao.insertOrUpdateChat(updatedChat)
+                return updatedChat
+            }
+            return matchingByName
+        }
 
         val newChat = ChatEntity(
             id = chatId,
             isGroup = false,
             name = contact.contactDisplayName,
+            groupIconUri = contact.contactAvatarUri,
             participantIdsJson = "[\"${me.id}\", \"${contact.contactUserId}\"]",
             lastMessageText = "Chat started",
             lastMessageTimestamp = System.currentTimeMillis()
@@ -301,6 +456,7 @@ class TalePulseRepository(
             name = groupName.ifBlank { "Custom Group" },
             groupDescription = groupDesc ?: "Group created by ${me.displayName}",
             participantIdsJson = idsJson,
+            adminIdsJson = "[\"${me.id}\"]",
             lastMessageText = "${me.displayName} created group \"$groupName\"",
             lastMessageTimestamp = System.currentTimeMillis()
         )
@@ -317,8 +473,8 @@ class TalePulseRepository(
             timestamp = System.currentTimeMillis(),
             status = "READ",
             emailTransportStatus = "DELIVERED_INBOX",
-            emailSubject = "TalePulse Group: $groupName",
-            emailMessageId = "<group-${UUID.randomUUID().toString().take(6)}@talepulse.net>"
+            emailSubject = "Linko Group: $groupName",
+            emailMessageId = "<group-${UUID.randomUUID().toString().take(6)}@linko.net>"
         )
         messageDao.insertMessage(systemMessage)
 
@@ -335,8 +491,8 @@ class TalePulseRepository(
     ) {
         val msgId = "m_${UUID.randomUUID().toString().take(8)}"
         val chat = chatDao.getChatById(chatId)
-        val subject = if (chat?.isGroup == true) "Group [${chat.name}]: ${text.take(25)}" else "TalePulse Message from ${sender.displayName}"
-        val emailMsgId = "<msg-${UUID.randomUUID().toString().take(8)}@talepulse.net>"
+        val subject = if (chat?.isGroup == true) "Group [${chat.name}]: ${text.take(25)}" else "Linko Message from ${sender.displayName}"
+        val emailMsgId = "<msg-${UUID.randomUUID().toString().take(8)}@linko.net>"
 
         val encryptedText = EncryptionManager.encrypt(text, chatId)
 
@@ -370,10 +526,8 @@ class TalePulseRepository(
 
         // Handle delivery & replies in background
         ioScope.launch {
-            delay(800)
+            delay(600)
             messageDao.updateMessageStatus(msgId, "DELIVERED")
-            delay(1000)
-            messageDao.updateMessageStatus(msgId, "READ")
             messageDao.updateEmailTransportStatus(msgId, "DELIVERED_INBOX")
 
             if (chatId == "chat_gemini_ai" || chat?.name?.contains("Gemini") == true) {
@@ -387,13 +541,13 @@ class TalePulseRepository(
                     chatId = chatId,
                     senderId = "user_gemini",
                     senderName = "Gemini AI Assistant",
-                    senderEmail = "gemini.ai@talepulse.com",
+                    senderEmail = "gemini.ai@linko.com",
                     text = encryptedAiResponse,
                     timestamp = System.currentTimeMillis(),
-                    status = "READ",
+                    status = "DELIVERED",
                     emailTransportStatus = "DELIVERED_INBOX",
                     emailSubject = "Gemini AI Response",
-                    emailMessageId = "<gemini-${UUID.randomUUID().toString().take(6)}@talepulse.net>",
+                    emailMessageId = "<gemini-${UUID.randomUUID().toString().take(6)}@linko.net>",
                     isEncrypted = true,
                     encryptionAlgorithm = "AES-256-GCM"
                 )
@@ -401,6 +555,11 @@ class TalePulseRepository(
                 chatDao.updateLastMessage(chatId, aiResponse.take(60), System.currentTimeMillis())
             }
         }
+    }
+
+    suspend fun markChatMessagesAsRead(chatId: String, currentUserId: String) {
+        messageDao.markUnreadMessagesAsRead(chatId, currentUserId)
+        chatDao.clearUnreadCount(chatId)
     }
 
     suspend fun clearChatUnread(chatId: String) {
@@ -432,6 +591,46 @@ class TalePulseRepository(
 
     suspend fun updateProfile(updatedUser: UserEntity) {
         userDao.updateUser(updatedUser)
+    }
+
+    suspend fun toggleMessageReaction(messageId: String, emoji: String, userId: String) {
+        val message = messageDao.getMessageById(messageId) ?: return
+        val currentJson = message.reactionsJson.ifBlank { "{}" }
+        val reactionsMap = mutableMapOf<String, MutableList<String>>()
+
+        try {
+            val json = JSONObject(currentJson)
+            val keys = json.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                val arr = json.optJSONArray(key) ?: JSONArray()
+                val list = mutableListOf<String>()
+                for (i in 0 until arr.length()) {
+                    list.add(arr.getString(i))
+                }
+                reactionsMap[key] = list
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        val userList = reactionsMap.getOrPut(emoji) { mutableListOf() }
+        if (userList.contains(userId)) {
+            userList.remove(userId)
+        } else {
+            userList.add(userId)
+        }
+
+        if (userList.isEmpty()) {
+            reactionsMap.remove(emoji)
+        }
+
+        val resultJson = JSONObject()
+        for ((key, list) in reactionsMap) {
+            resultJson.put(key, JSONArray(list))
+        }
+
+        messageDao.updateMessageReactions(messageId, resultJson.toString())
     }
 
     suspend fun votePoll(messageId: String, optionIndex: Int, userId: String) {
@@ -561,6 +760,69 @@ class TalePulseRepository(
             text = evObj.toString(),
             mediaType = "EVENT"
         )
+    }
+
+    suspend fun addGroupMembers(chatId: String, newContacts: List<ContactEntity>, actor: UserEntity) {
+        val chat = chatDao.getChatById(chatId) ?: return
+        val participants = parseJsonArray(chat.participantIdsJson)
+        newContacts.forEach {
+            if (!participants.contains(it.contactUserId)) {
+                participants.add(it.contactUserId)
+            }
+        }
+        val updated = chat.copy(participantIdsJson = toJsonArray(participants))
+        chatDao.insertOrUpdateChat(updated)
+
+        val names = newContacts.joinToString { it.contactDisplayName }
+        val sysMsg = MessageEntity(
+            id = "m_${UUID.randomUUID().toString().take(8)}",
+            chatId = chatId,
+            senderId = actor.id,
+            senderName = "System",
+            senderEmail = actor.email,
+            text = "👥 ${actor.displayName} added $names to the group.",
+            timestamp = System.currentTimeMillis()
+        )
+        messageDao.insertMessage(sysMsg)
+    }
+
+    suspend fun toggleAdminRole(chatId: String, targetUserId: String, makeAdmin: Boolean) {
+        val chat = chatDao.getChatById(chatId) ?: return
+        val admins = parseJsonArray(chat.adminIdsJson)
+        if (makeAdmin) {
+            if (!admins.contains(targetUserId)) admins.add(targetUserId)
+        } else {
+            admins.remove(targetUserId)
+        }
+        val updated = chat.copy(adminIdsJson = toJsonArray(admins))
+        chatDao.insertOrUpdateChat(updated)
+    }
+
+    suspend fun removeGroupMember(chatId: String, targetUserId: String) {
+        val chat = chatDao.getChatById(chatId) ?: return
+        val participants = parseJsonArray(chat.participantIdsJson)
+        val admins = parseJsonArray(chat.adminIdsJson)
+        participants.remove(targetUserId)
+        admins.remove(targetUserId)
+        val updated = chat.copy(
+            participantIdsJson = toJsonArray(participants),
+            adminIdsJson = toJsonArray(admins)
+        )
+        chatDao.insertOrUpdateChat(updated)
+    }
+
+    private fun parseJsonArray(jsonStr: String): MutableList<String> {
+        if (jsonStr.isBlank() || jsonStr == "[]") return mutableListOf()
+        return jsonStr.removeSurrounding("[", "]")
+            .split(",")
+            .map { it.trim().removeSurrounding("\"") }
+            .filter { it.isNotBlank() }
+            .toMutableList()
+    }
+
+    private fun toJsonArray(list: List<String>): String {
+        if (list.isEmpty()) return "[]"
+        return list.joinToString(prefix = "[\"", postfix = "\"]", separator = "\",\"")
     }
 }
 

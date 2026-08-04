@@ -3,6 +3,7 @@ package com.example
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -31,6 +32,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,12 +58,14 @@ import com.example.ui.screens.calls.CallsScreen
 import com.example.ui.screens.calls.VideoCallScreen
 import com.example.ui.screens.chats.ChatsScreen
 import com.example.ui.screens.chats.DirectChatScreen
+import com.example.util.LocalizationManager
 import com.example.ui.screens.friends.AddContactDialog
 import com.example.ui.screens.friends.CreateGroupScreen
 import com.example.ui.screens.friends.FriendsScreen
 import com.example.ui.screens.settings.SettingsScreen
 import com.example.ui.screens.status.StatusScreen
 import com.example.ui.theme.Emerald500
+import com.example.ui.theme.LinkoTheme
 import com.example.ui.theme.TalePulseTheme
 import com.example.ui.viewmodel.TalePulseViewModel
 
@@ -90,8 +94,8 @@ class MainActivity : ComponentActivity() {
             val isDarkMode by viewModel.isDarkMode.collectAsStateWithLifecycle()
             val selectedPalette by viewModel.selectedThemePalette.collectAsStateWithLifecycle()
 
-            TalePulseTheme(darkTheme = isDarkMode, palette = selectedPalette) {
-                TalePulseApp(viewModel = viewModel)
+            LinkoTheme(darkTheme = isDarkMode, palette = selectedPalette) {
+                LinkoApp(viewModel = viewModel)
             }
         }
     }
@@ -103,7 +107,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun TalePulseApp(viewModel: TalePulseViewModel) {
+fun LinkoApp(viewModel: TalePulseViewModel) {
     val navController = rememberNavController()
 
     val authState by viewModel.authState.collectAsStateWithLifecycle()
@@ -121,6 +125,8 @@ fun TalePulseApp(viewModel: TalePulseViewModel) {
     val customWallpaperUri by viewModel.customWallpaperUri.collectAsStateWithLifecycle()
     val customWallpaperDimming by viewModel.customWallpaperDimming.collectAsStateWithLifecycle()
     val customWallpaperScale by viewModel.customWallpaperScale.collectAsStateWithLifecycle()
+    val currentLanguage by viewModel.appLanguage.collectAsStateWithLifecycle()
+    val translatedMessages by viewModel.translatedMessages.collectAsStateWithLifecycle()
     val actionStatusMessage by viewModel.actionStatusMessage.collectAsStateWithLifecycle()
 
 
@@ -130,6 +136,14 @@ fun TalePulseApp(viewModel: TalePulseViewModel) {
 
     val context = LocalContext.current
     val activity = context as? Activity
+
+    val handleStartCall: (String, String, String?, CallType) -> Unit = { name, email, avatar, type ->
+        if (email.contains("gemini", ignoreCase = true) || name.contains("Gemini", ignoreCase = true)) {
+            Toast.makeText(context, "Calling is not supported for AI Assistant. Please type your message.", Toast.LENGTH_SHORT).show()
+        } else {
+            viewModel.startGoogleMeetCall(context, name, email, avatar, type)
+        }
+    }
 
     LaunchedEffect(activity?.intent) {
         activity?.intent?.let { intent ->
@@ -168,6 +182,21 @@ fun TalePulseApp(viewModel: TalePulseViewModel) {
         }
     }
 
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> viewModel.setAppForegroundState(true)
+                androidx.lifecycle.Lifecycle.Event.ON_PAUSE, androidx.lifecycle.Lifecycle.Event.ON_STOP -> viewModel.setAppForegroundState(false)
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
     if (showAddContactModal) {
         AddContactDialog(
             onAddByEmail = { email ->
@@ -182,28 +211,6 @@ fun TalePulseApp(viewModel: TalePulseViewModel) {
             },
             onDismiss = { showAddContactModal = false }
         )
-    }
-
-    // Active Call Overlay (Audio / Video)
-    if (activeCallState != null) {
-        val callState = activeCallState!!
-        if (callState.callType == CallType.VIDEO) {
-            VideoCallScreen(
-                callState = callState,
-                onToggleMute = { viewModel.toggleMute() },
-                onToggleVideo = { viewModel.toggleVideo() },
-                onSwitchCamera = { viewModel.switchCamera() },
-                onEndCall = { viewModel.endCall() }
-            )
-        } else {
-            AudioCallScreen(
-                callState = callState,
-                onToggleMute = { viewModel.toggleMute() },
-                onToggleSpeaker = { viewModel.toggleSpeaker() },
-                onEndCall = { viewModel.endCall() }
-            )
-        }
-        return
     }
 
     // Main App Navigation
@@ -236,7 +243,7 @@ fun TalePulseApp(viewModel: TalePulseViewModel) {
                                 Icon(Icons.Default.ChatBubble, contentDescription = "Chats")
                             }
                         },
-                        label = { Text("Chats") },
+                        label = { Text(LocalizationManager.getString("tab_chats", currentLanguage)) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = Emerald500,
                             selectedTextColor = Emerald500,
@@ -258,7 +265,7 @@ fun TalePulseApp(viewModel: TalePulseViewModel) {
                                 Icon(Icons.Default.HistoryToggleOff, contentDescription = "Status")
                             }
                         },
-                        label = { Text("Status") },
+                        label = { Text(LocalizationManager.getString("tab_status", currentLanguage)) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = Emerald500,
                             selectedTextColor = Emerald500,
@@ -271,7 +278,7 @@ fun TalePulseApp(viewModel: TalePulseViewModel) {
                         selected = currentRoute == "friends",
                         onClick = { navController.navigate("friends") { popUpTo("chats") { saveState = true }; launchSingleTop = true; restoreState = true } },
                         icon = { Icon(Icons.Default.People, contentDescription = "Friends") },
-                        label = { Text("Friends") },
+                        label = { Text(LocalizationManager.getString("tab_friends", currentLanguage)) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = Emerald500,
                             selectedTextColor = Emerald500,
@@ -285,7 +292,7 @@ fun TalePulseApp(viewModel: TalePulseViewModel) {
                         selected = currentRoute == "calls",
                         onClick = { navController.navigate("calls") { popUpTo("chats") { saveState = true }; launchSingleTop = true; restoreState = true } },
                         icon = { Icon(Icons.Default.Call, contentDescription = "Calls") },
-                        label = { Text("Calls") },
+                        label = { Text(LocalizationManager.getString("tab_calls", currentLanguage)) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = Emerald500,
                             selectedTextColor = Emerald500,
@@ -298,7 +305,7 @@ fun TalePulseApp(viewModel: TalePulseViewModel) {
                         selected = currentRoute == "settings",
                         onClick = { navController.navigate("settings") { popUpTo("chats") { saveState = true }; launchSingleTop = true; restoreState = true } },
                         icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
-                        label = { Text("Settings") },
+                        label = { Text(LocalizationManager.getString("tab_settings", currentLanguage)) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = Emerald500,
                             selectedTextColor = Emerald500,
@@ -333,6 +340,7 @@ fun TalePulseApp(viewModel: TalePulseViewModel) {
                     ChatsScreen(
                         chats = chats,
                         contacts = contacts,
+                        currentLanguage = currentLanguage,
                         onSelectChat = { chatId ->
                             viewModel.selectChat(chatId)
                             navController.navigate("direct_chat")
@@ -343,7 +351,14 @@ fun TalePulseApp(viewModel: TalePulseViewModel) {
                             }
                         },
                         onCreateGroupClick = { navController.navigate("create_group") },
-                        onAddContactClick = { showAddContactModal = true }
+                        onAddContactClick = { showAddContactModal = true },
+                        onOpenContactChat = { contact ->
+                            viewModel.openDirectChat(contact) {
+                                navController.navigate("direct_chat")
+                            }
+                        },
+                        isUserOnline = { email -> viewModel.isUserOnline(email) },
+                        isChatOnline = { chat -> viewModel.isChatOnline(chat) }
                     )
                 }
 
@@ -375,14 +390,13 @@ fun TalePulseApp(viewModel: TalePulseViewModel) {
                 composable("friends") {
                     FriendsScreen(
                         contacts = contacts,
+                        isUserOnline = { email -> viewModel.isUserOnline(email) },
                         onOpenChat = { contact ->
                             viewModel.openDirectChat(contact) {
                                 navController.navigate("direct_chat")
                             }
                         },
-                        onStartCall = { name, email, avatar, type ->
-                            viewModel.startCall(name, email, avatar, type)
-                        },
+                        onStartCall = handleStartCall,
                         onAddContactClick = { showAddContactModal = true },
                         onCreateGroupClick = { navController.navigate("create_group") }
                     )
@@ -392,9 +406,7 @@ fun TalePulseApp(viewModel: TalePulseViewModel) {
                     CallsScreen(
                         callLogs = callLogs,
                         contacts = contacts,
-                        onStartCall = { name, email, avatar, type ->
-                            viewModel.startCall(name, email, avatar, type)
-                        }
+                        onStartCall = handleStartCall
                     )
                 }
 
@@ -407,6 +419,8 @@ fun TalePulseApp(viewModel: TalePulseViewModel) {
                         customWallpaperUri = customWallpaperUri,
                         customWallpaperDimming = customWallpaperDimming,
                         customWallpaperScale = customWallpaperScale,
+                        currentLanguage = currentLanguage,
+                        onSelectLanguage = { lang -> viewModel.setAppLanguage(lang) },
                         onToggleDarkMode = { viewModel.toggleDarkMode() },
                         onSelectPalette = { palette -> viewModel.setThemePalette(palette) },
                         onSelectWallpaper = { wallpaper -> viewModel.setChatWallpaper(wallpaper) },
@@ -425,6 +439,9 @@ fun TalePulseApp(viewModel: TalePulseViewModel) {
                         onUpdateProfile = { name, status ->
                             viewModel.updateProfile(name, status)
                         },
+                        onUpdateAvatarUri = { uri ->
+                            viewModel.updateAvatarUri(uri)
+                        },
                         onLogout = {
                             viewModel.logout()
                             navController.navigate("auth") {
@@ -440,17 +457,32 @@ fun TalePulseApp(viewModel: TalePulseViewModel) {
                         messages = activeMessages,
                         currentUser = currentUser,
                         contacts = contacts,
+                        isUserOnline = { email -> viewModel.isUserOnline(email) },
                         chatWallpaper = selectedWallpaper,
                         customWallpaperUri = customWallpaperUri,
                         customWallpaperDimming = customWallpaperDimming,
                         customWallpaperScale = customWallpaperScale,
                         isDarkMode = isDarkMode,
+                        currentLanguage = currentLanguage,
+                        translatedMessages = translatedMessages,
                         onBackClick = {
                             viewModel.clearSelectedChat()
                             navController.popBackStack()
                         },
                         onSendMessage = { text, mediaUri, mediaType, richFormat ->
                             viewModel.sendMessage(text, mediaUri, mediaType, richFormat)
+                        },
+                        onMarkAsRead = { chatId ->
+                            viewModel.markChatMessagesAsRead(chatId)
+                        },
+                        onToggleReaction = { messageId, emoji ->
+                            viewModel.toggleReaction(messageId, emoji)
+                        },
+                        onDeleteForMe = { messageId ->
+                            viewModel.deleteMessageForMe(messageId)
+                        },
+                        onDeleteForEveryone = { messageId ->
+                            viewModel.deleteMessageForEveryone(messageId)
                         },
                         onVotePoll = { messageId, optionIndex ->
                             viewModel.votePoll(messageId, optionIndex)
@@ -467,8 +499,27 @@ fun TalePulseApp(viewModel: TalePulseViewModel) {
                         onSendEvent = { title, dateText, locationText ->
                             viewModel.sendEventAttachment(title, dateText, locationText)
                         },
-                        onStartCall = { name, email, avatar, type ->
-                            viewModel.startCall(name, email, avatar, type)
+                        onStartCall = handleStartCall,
+                        onClearChatHistory = {
+                            currentChat?.id?.let { viewModel.clearChatHistory(it) }
+                        },
+                        onDeleteChat = {
+                            currentChat?.id?.let { viewModel.deleteChat(it) }
+                            navController.popBackStack()
+                        },
+                        onAddGroupMembers = { chatId, selectedContacts ->
+                            viewModel.addGroupMembers(chatId, selectedContacts)
+                        },
+                        onToggleAdminRole = { chatId, memberUserId, makeAdmin ->
+                            viewModel.toggleAdminRole(chatId, memberUserId, makeAdmin)
+                        },
+                        onRemoveMember = { chatId, memberUserId ->
+                            viewModel.removeGroupMember(chatId, memberUserId)
+                        },
+                        onSendPrivateMessage = { contactUserId, contactEmail, contactName ->
+                            viewModel.openOrCreateDirectChat(contactUserId, contactEmail, contactName) {
+                                navController.navigate("direct_chat")
+                            }
                         }
                     )
                 }

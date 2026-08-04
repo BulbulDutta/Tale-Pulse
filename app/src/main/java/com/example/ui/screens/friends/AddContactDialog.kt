@@ -144,7 +144,7 @@ fun AddContactDialog(
                             )
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "Tale Pulse will match the email address and instantly connect your profiles.",
+                                text = "Linko will match the email address and instantly connect your profiles.",
                                 fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

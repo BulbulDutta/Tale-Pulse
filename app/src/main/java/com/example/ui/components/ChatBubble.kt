@@ -4,13 +4,17 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -18,14 +22,17 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
@@ -33,6 +40,7 @@ import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Poll
 import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -41,6 +49,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -48,13 +57,23 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import com.example.ui.theme.Emerald500
 import com.example.ui.theme.ReceivedBubbleDark
@@ -81,11 +100,16 @@ fun ChatBubble(
     formattedRichText: String? = null, // "BOLD", "ITALIC", "CODE"
     isEncrypted: Boolean = true,
     currentUserId: String? = null,
+    reactionsJson: String = "{}",
+    onToggleReaction: ((String) -> Unit)? = null,
+    onLongPress: (() -> Unit)? = null,
     onVotePoll: ((optionIndex: Int) -> Unit)? = null,
     onMediaClick: (() -> Unit)? = null,
     onEmailBadgeClick: (() -> Unit)? = null,
+    onSwipeToReply: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    val haptic = LocalHapticFeedback.current
     val isDark = MaterialTheme.colorScheme.surface == ReceivedBubbleDark
     val bubbleColor = if (isFromMe) {
         if (isDark) SentBubbleDark else SentBubbleLight
@@ -94,6 +118,9 @@ fun ChatBubble(
     }
 
     var isPlayingAudio by remember { mutableStateOf(false) }
+    var showFullscreenImage by remember { mutableStateOf(false) }
+    var swipeOffsetX by remember { mutableFloatStateOf(0f) }
+    val maxSwipeOffset = 100f
 
     Column(
         modifier = modifier
@@ -101,22 +128,122 @@ fun ChatBubble(
             .padding(vertical = 4.dp, horizontal = 8.dp),
         horizontalAlignment = if (isFromMe) Alignment.End else Alignment.Start
     ) {
-        Surface(
-            shape = RoundedCornerShape(
-                topStart = 16.dp,
-                topEnd = 16.dp,
-                bottomStart = if (isFromMe) 16.dp else 4.dp,
-                bottomEnd = if (isFromMe) 4.dp else 16.dp
-            ),
-            color = bubbleColor,
-            tonalElevation = 2.dp,
-            modifier = Modifier
-                .widthIn(max = 300.dp)
-                .testTag("chat_bubble_${if (isFromMe) "sent" else "received"}")
+        Box(
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = if (isFromMe) Alignment.CenterEnd else Alignment.CenterStart
         ) {
-            Column(modifier = Modifier.padding(10.dp)) {
-                // Sender Label for incoming messages
-                if (!isFromMe && !senderName.isNullOrBlank()) {
+            if (swipeOffsetX > 5f) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(start = 8.dp)
+                        .size(32.dp)
+                        .graphicsLayer {
+                            alpha = (swipeOffsetX / 50f).coerceIn(0f, 1f)
+                            scaleX = (swipeOffsetX / 50f).coerceIn(0.5f, 1f)
+                            scaleY = (swipeOffsetX / 50f).coerceIn(0.5f, 1f)
+                        }
+                        .background(Emerald500, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Reply,
+                        contentDescription = "Swipe to Reply",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+
+            Surface(
+                shape = RoundedCornerShape(
+                    topStart = 16.dp,
+                    topEnd = 16.dp,
+                    bottomStart = if (isFromMe) 16.dp else 4.dp,
+                    bottomEnd = if (isFromMe) 4.dp else 16.dp
+                ),
+                color = bubbleColor,
+                tonalElevation = 2.dp,
+                modifier = Modifier
+                    .widthIn(max = 300.dp)
+                    .offset { IntOffset(swipeOffsetX.roundToInt(), 0) }
+                    .pointerInput(Unit) {
+                        detectHorizontalDragGestures(
+                            onHorizontalDrag = { change, dragAmount ->
+                                change.consume()
+                                swipeOffsetX = (swipeOffsetX + dragAmount).coerceIn(0f, maxSwipeOffset)
+                            },
+                            onDragEnd = {
+                                if (swipeOffsetX >= 45f) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    onSwipeToReply?.invoke()
+                                }
+                                swipeOffsetX = 0f
+                            },
+                            onDragCancel = {
+                                swipeOffsetX = 0f
+                            }
+                        )
+                    }
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onLongPress = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onLongPress?.invoke()
+                            }
+                        )
+                    }
+                    .testTag("chat_bubble_${if (isFromMe) "sent" else "received"}")
+            ) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    // Quoted Message Reply Header
+                    if (formattedRichText?.startsWith("REPLY:") == true) {
+                        val replyData = formattedRichText.removePrefix("REPLY:")
+                        val parts = replyData.split("|", limit = 2)
+                        val replySenderName = parts.getOrNull(0) ?: "Message"
+                        val replyTextSnippet = parts.getOrNull(1) ?: ""
+
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .width(3.dp)
+                                        .height(26.dp)
+                                        .background(Emerald500, RoundedCornerShape(2.dp))
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Column {
+                                    Text(
+                                        text = replySenderName,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Emerald500
+                                    )
+                                    Text(
+                                        text = replyTextSnippet,
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Sender Label for incoming messages
+                    if (!isFromMe && !senderName.isNullOrBlank()) {
                     Text(
                         text = senderName!!,
                         fontWeight = FontWeight.Bold,
@@ -147,7 +274,10 @@ fun ChatBubble(
                                     .fillMaxWidth()
                                     .height(170.dp)
                                     .clip(RoundedCornerShape(12.dp))
-                                    .clickable(enabled = onMediaClick != null) { onMediaClick?.invoke() }
+                                    .clickable {
+                                        showFullscreenImage = true
+                                        onMediaClick?.invoke()
+                                    }
                             )
                         } else {
                             Row(
@@ -206,6 +336,8 @@ fun ChatBubble(
                     }
 
                     "AUDIO" -> {
+                        val context = LocalContext.current
+                        val audioTargetUri = mediaUri ?: ""
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
@@ -215,7 +347,21 @@ fun ChatBubble(
                                 .padding(8.dp)
                         ) {
                             IconButton(
-                                onClick = { isPlayingAudio = !isPlayingAudio },
+                                onClick = {
+                                    if (audioTargetUri.isNotBlank()) {
+                                        if (isPlayingAudio) {
+                                            com.example.util.AudioPlayerManager.pauseAudio()
+                                            isPlayingAudio = false
+                                        } else {
+                                            isPlayingAudio = true
+                                            com.example.util.AudioPlayerManager.playAudio(context, audioTargetUri) {
+                                                isPlayingAudio = false
+                                            }
+                                        }
+                                    } else {
+                                        isPlayingAudio = !isPlayingAudio
+                                    }
+                                },
                                 modifier = Modifier.size(36.dp)
                             ) {
                                 Icon(
@@ -227,7 +373,7 @@ fun ChatBubble(
                             Spacer(modifier = Modifier.width(6.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = if (isPlayingAudio) "🔊 Audio Note • Playing 0:03" else "🎙️ Voice Note • MP3 (0:14)",
+                                    text = if (isPlayingAudio) "🔊 Voice Note • Playing..." else "🎙️ Voice Note • AAC/m4a",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface
@@ -238,6 +384,19 @@ fun ChatBubble(
                                     fontFamily = FontFamily.Monospace,
                                     color = Emerald500
                                 )
+                            }
+                            if (!mediaUri.isNullOrEmpty()) {
+                                IconButton(
+                                    onClick = { onMediaClick?.invoke() },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Download,
+                                        contentDescription = "Download Audio",
+                                        tint = Emerald500,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
                             }
                         }
                         Spacer(modifier = Modifier.height(6.dp))
@@ -275,17 +434,22 @@ fun ChatBubble(
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
-                                    text = "2.4 MB • PDF Document",
+                                    text = "File Document • Tap to Save",
                                     fontSize = 11.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                            Icon(
-                                imageVector = Icons.Default.Download,
-                                contentDescription = "Download",
-                                tint = Emerald500,
-                                modifier = Modifier.size(20.dp)
-                            )
+                            IconButton(
+                                onClick = { onMediaClick?.invoke() },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Download,
+                                    contentDescription = "Download Document",
+                                    tint = Emerald500,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
                         Spacer(modifier = Modifier.height(6.dp))
                     }
@@ -307,7 +471,20 @@ fun ChatBubble(
                 }
 
                 // Standard Text Content if NOT a special media type like Poll
-                if (text.isNotBlank() && mediaType?.uppercase() !in listOf("POLL", "LOCATION", "CONTACT", "EVENT")) {
+                val isDefaultImageMetadata = mediaType?.uppercase() == "IMAGE" && (
+                    text.isBlank() ||
+                    text.equals("Photo Attachment", ignoreCase = true) ||
+                    text.equals("Photo", ignoreCase = true) ||
+                    text.equals("Image", ignoreCase = true) ||
+                    text.startsWith("http://", ignoreCase = true) ||
+                    text.startsWith("https://", ignoreCase = true) ||
+                    text.startsWith("img_", ignoreCase = true) ||
+                    text.endsWith(".jpg", ignoreCase = true) ||
+                    text.endsWith(".jpeg", ignoreCase = true) ||
+                    text.endsWith(".png", ignoreCase = true)
+                )
+
+                if (text.isNotBlank() && mediaType?.uppercase() !in listOf("POLL", "LOCATION", "CONTACT", "EVENT") && !isDefaultImageMetadata) {
                     val fontStyle = if (formattedRichText == "ITALIC") FontStyle.Italic else FontStyle.Normal
                     val fontWeight = if (formattedRichText == "BOLD") FontWeight.Bold else FontWeight.Normal
                     val fontFamily = if (formattedRichText == "CODE") FontFamily.Monospace else FontFamily.Default
@@ -320,6 +497,48 @@ fun ChatBubble(
                         fontFamily = fontFamily,
                         color = MaterialTheme.colorScheme.onSurface
                     )
+
+                    if (text.contains("Google Meet") || text.contains("meet.google.com") || text.contains("Join my") || text.contains("meet.")) {
+                        val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+                        val extractedUrl = text.lines().firstOrNull { it.contains("http") }?.trim()
+                            ?: if (text.contains("https://")) "https://" + text.substringAfter("https://").substringBefore(" ").substringBefore("\n") else "https://meet.google.com"
+
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Surface(
+                            color = Color(0xFF00897B).copy(alpha = 0.15f),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, Color(0xFF00897B), RoundedCornerShape(12.dp))
+                                .clickable {
+                                    try {
+                                        uriHandler.openUri(if (extractedUrl.startsWith("http")) extractedUrl else "https://$extractedUrl")
+                                    } catch (_: Exception) {
+                                    }
+                                }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFF00897B)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.Videocam, contentDescription = "Google Meet", tint = Color.White, modifier = Modifier.size(20.dp))
+                                }
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Google Meet Session", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFF00897B))
+                                    Text("Tap to join Google Meet call", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface)
+                                }
+                                Icon(Icons.Default.OpenInNew, contentDescription = "Open Google Meet", tint = Color(0xFF00897B), modifier = Modifier.size(18.dp))
+                            }
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(4.dp))
@@ -358,13 +577,65 @@ fun ChatBubble(
                         MessageStatusTicks(status = status)
                     }
                 }
+
+                if (onToggleReaction != null && reactionsJson.isNotBlank() && reactionsJson != "{}") {
+                    MessageReactionBadges(
+                        reactionsJson = reactionsJson,
+                        currentUserId = currentUserId,
+                        onToggleReaction = onToggleReaction
+                    )
+                }
+            }
+        }
+
+        if (showFullscreenImage && !mediaUri.isNullOrEmpty()) {
+            Dialog(
+                onDismissRequest = { showFullscreenImage = false },
+                properties = DialogProperties(usePlatformDefaultWidth = false)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.95f))
+                        .clickable { showFullscreenImage = false },
+                    contentAlignment = Alignment.Center
+                ) {
+                    AsyncImage(
+                        model = mediaUri,
+                        contentDescription = "Full Screen Photo",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp)
+                    )
+                    IconButton(
+                        onClick = { showFullscreenImage = false },
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(20.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close",
+                            tint = Color.White,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+                }
             }
         }
     }
 }
+}
+
+data class PollOptionData(
+    val index: Int,
+    val text: String,
+    val votes: List<String>
+)
 
 @Composable
-private fun PollBubbleContent(
+fun PollBubbleContent(
     pollJsonStr: String,
     currentUserId: String?,
     onVotePoll: ((optionIndex: Int) -> Unit)?
@@ -490,14 +761,8 @@ private fun PollBubbleContent(
     }
 }
 
-private data class PollOptionData(
-    val index: Int,
-    val text: String,
-    val votes: List<String>
-)
-
 @Composable
-private fun LocationBubbleContent(locationJsonStr: String) {
+fun LocationBubbleContent(locationJsonStr: String) {
     var title = "Pinned Location"
     var address = "San Francisco, CA"
     var lat = 37.7749
@@ -552,15 +817,15 @@ private fun LocationBubbleContent(locationJsonStr: String) {
 }
 
 @Composable
-private fun ContactBubbleContent(contactJsonStr: String) {
+fun ContactBubbleContent(contactJsonStr: String) {
     var name = "Shared Contact"
-    var email = "contact@talepulse.com"
+    var email = "contact@linko.com"
     var phone = "+1 (555) 012-3456"
 
     try {
         val json = JSONObject(contactJsonStr)
         name = json.optString("name", "Shared Contact")
-        email = json.optString("email", "contact@talepulse.com")
+        email = json.optString("email", "contact@linko.com")
         phone = json.optString("phone", "+1 (555) 012-3456")
     } catch (e: Exception) {
         name = contactJsonStr
@@ -586,7 +851,7 @@ private fun ContactBubbleContent(contactJsonStr: String) {
 }
 
 @Composable
-private fun EventBubbleContent(eventJsonStr: String) {
+fun EventBubbleContent(eventJsonStr: String) {
     var title = "Scheduled Event"
     var dateText = "Tomorrow, 3:00 PM"
     var location = "Online Room"

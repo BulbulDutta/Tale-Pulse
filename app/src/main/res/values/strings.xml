@@ -1,3 +1,4 @@
 <resources>
-    <string name="app_name">Tale Pulse</string>
+    <string name="app_name">Linko</string>
+    <string name="default_web_client_id">419727588321-vpr8ij7unfkrlpi10fb8ceb5q1g0tfj.apps.googleusercontent.com</string>
 </resources>

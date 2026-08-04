@@ -20,10 +20,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Cameraswitch
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Videocam
@@ -69,23 +71,22 @@ fun VideoCallScreen(
 
     var hasCameraPermission by remember {
         mutableStateOf(
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.CAMERA
-            ) == PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         )
     }
 
     val launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission(),
-        onResult = { isGranted ->
-            hasCameraPermission = isGranted
+        contract = ActivityResultContracts.RequestMultiplePermissions(),
+        onResult = { permissions ->
+            hasCameraPermission = permissions[Manifest.permission.CAMERA] == true &&
+                    permissions[Manifest.permission.RECORD_AUDIO] == true
         }
     )
 
     LaunchedEffect(Unit) {
         if (!hasCameraPermission) {
-            launcher.launch(Manifest.permission.CAMERA)
+            launcher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO))
         }
     }
 
@@ -116,6 +117,31 @@ fun VideoCallScreen(
                     fontSize = 14.sp
                 )
             }
+        }
+
+        // Top E2EE Overlay Indicator Badge
+        Row(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 48.dp)
+                .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(20.dp))
+                .border(1.dp, Emerald500.copy(alpha = 0.4f), RoundedCornerShape(20.dp))
+                .padding(horizontal = 14.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.Lock,
+                contentDescription = "E2EE",
+                tint = Emerald500,
+                modifier = Modifier.size(14.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "Signal E2EE Encrypted Call",
+                color = Color.White,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold
+            )
         }
 
         // Local Self Camera Preview PiP Window (Picture-in-Picture)
@@ -231,7 +257,7 @@ fun VideoCallScreen(
                 IconButton(
                     onClick = onEndCall,
                     colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Red),
-                    modifier = Modifier.size(52.dp)
+                    modifier = Modifier.size(54.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.CallEnd,

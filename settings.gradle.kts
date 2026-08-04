@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Tale Pulse"
+rootProject.name = "Linko"
 
 include(":app")

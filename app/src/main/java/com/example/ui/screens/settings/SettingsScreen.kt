@@ -1,6 +1,12 @@
 package com.example.ui.screens.settings
 
+import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -16,9 +22,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -26,20 +34,35 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.Accessibility
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.ColorLens
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.ListAlt
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.QrCode2
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Wallpaper
 import androidx.compose.material3.AlertDialog
@@ -47,11 +70,16 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -65,13 +93,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.data.local.entity.UserEntity
@@ -80,8 +111,29 @@ import com.example.ui.components.UserAvatar
 import com.example.ui.components.WallpaperPreviewDialog
 import com.example.ui.theme.AppThemePalette
 import com.example.ui.theme.ChatWallpaper
+import java.io.File
+import java.io.FileOutputStream
 import com.example.ui.theme.ChatWallpaperBackground
+import com.example.util.AppLanguage
+import com.example.util.LocalizationManager
 
+enum class SettingsDialogType {
+    NONE,
+    ACCOUNT,
+    PRIVACY,
+    LISTS,
+    CHATS,
+    APPEARANCE,
+    BROADCASTS,
+    NOTIFICATIONS,
+    STORAGE,
+    ACCESSIBILITY,
+    LANGUAGE,
+    HELP,
+    ACCOUNTS_CENTRE
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     user: UserEntity?,
@@ -91,6 +143,8 @@ fun SettingsScreen(
     customWallpaperUri: String? = null,
     customWallpaperDimming: Float = 0.3f,
     customWallpaperScale: String = "CROP",
+    currentLanguage: AppLanguage = AppLanguage.ENGLISH,
+    onSelectLanguage: (AppLanguage) -> Unit = {},
     onToggleDarkMode: () -> Unit,
     onSelectPalette: (AppThemePalette) -> Unit,
     onSelectWallpaper: (ChatWallpaper) -> Unit,
@@ -99,17 +153,52 @@ fun SettingsScreen(
     onTriggerCallNotification: (isVideo: Boolean) -> Unit = {},
     onTriggerFriendRequestNotification: () -> Unit = {},
     onUpdateProfile: (displayName: String, statusMessage: String) -> Unit,
+    onUpdateAvatarUri: (String?) -> Unit = {},
     onLogout: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+
     var showQrModal by remember { mutableStateOf(false) }
     var showEditProfileDialog by remember { mutableStateOf(false) }
+    var showAvatarBottomSheet by remember { mutableStateOf(false) }
+    var showSearch by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var activeDialog by remember { mutableStateOf(SettingsDialogType.NONE) }
 
     var editDisplayName by remember { mutableStateOf(user?.displayName ?: "") }
     var editStatusMessage by remember { mutableStateOf(user?.statusMessage ?: "") }
 
     var pendingCustomWallpaperUri by remember { mutableStateOf<String?>(null) }
     var showWallpaperPreviewDialog by remember { mutableStateOf(false) }
+
+    val avatarGalleryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val savedUri = copyUriToInternalStorage(context, uri)
+            onUpdateAvatarUri(savedUri)
+        }
+    }
+
+    val avatarCameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview()
+    ) { bitmap: Bitmap? ->
+        if (bitmap != null) {
+            val savedUri = saveBitmapToInternalStorage(context, bitmap)
+            onUpdateAvatarUri(savedUri)
+        }
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            avatarCameraLauncher.launch(null)
+        } else {
+            Toast.makeText(context, "Camera permission required to take photo", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -144,769 +233,312 @@ fun SettingsScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(16.dp)
                 .verticalScroll(scrollState)
         ) {
-            // Profile Card Header
-            Card(
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    UserAvatar(name = user?.displayName ?: "User", size = 80.dp)
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Text(
-                        text = user?.displayName ?: "User Name",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 20.sp,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-
-                    Text(
-                        text = user?.email ?: "email@talepulse.com",
-                        fontSize = 13.sp,
-                        color = currentPalette.primaryColor
-                    )
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    Text(
-                        text = "\"${user?.statusMessage}\"",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Row {
-                        Button(
-                            onClick = { showQrModal = !showQrModal },
-                            colors = ButtonDefaults.buttonColors(containerColor = currentPalette.primaryColor),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.QrCode2, contentDescription = "QR Code")
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("My Profile QR", fontSize = 13.sp)
-                        }
-
-                        Spacer(modifier = Modifier.width(10.dp))
-
-                        IconButton(
-                            onClick = {
-                                editDisplayName = user?.displayName ?: ""
-                                editStatusMessage = user?.statusMessage ?: ""
-                                showEditProfileDialog = true
-                            },
-                            modifier = Modifier
-                                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
-                                .size(48.dp)
-                        ) {
-                            Icon(Icons.Default.Edit, contentDescription = "Edit Profile", tint = currentPalette.primaryColor)
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Expandable Profile QR Code Viewer Card
-            AnimatedVisibility(visible = showQrModal) {
-                Card(
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 16.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(20.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = "Scan QR to Add Me",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "Friends can scan this QR code with their camera to instantly add you to their Tale Pulse contacts.",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        QrCodeGenerator(payload = user?.qrPayload ?: "talepulse://user?email=${user?.email}")
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Text(
-                            text = user?.qrPayload ?: "",
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-
-            // Customization & Appearance Panel
-            Card(
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            // Top Bar
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .testTag("appearance_customization_card")
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = LocalizationManager.getString("settings_title", currentLanguage),
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = { showSearch = !showSearch },
+                        modifier = Modifier.testTag("settings_search_btn")
+                    ) {
                         Icon(
-                            imageVector = Icons.Default.Palette,
-                            contentDescription = "Theme Customization",
-                            tint = currentPalette.primaryColor
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Theme & Chat Appearance",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp,
-                            color = MaterialTheme.colorScheme.onSurface
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "Search Settings",
+                            tint = MaterialTheme.colorScheme.onBackground
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Dark Mode Switch
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    IconButton(
+                        onClick = { showQrModal = true },
+                        modifier = Modifier.testTag("settings_qr_btn")
                     ) {
                         Icon(
-                            imageVector = Icons.Default.DarkMode,
-                            contentDescription = "Dark Mode",
+                            imageVector = Icons.Default.QrCode2,
+                            contentDescription = "My QR Code",
                             tint = currentPalette.primaryColor
                         )
-                        Spacer(modifier = Modifier.width(12.dp))
-
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Dark Theme Mode", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                            Text("Sleek night palette & safe contrast", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-
-                        Switch(
-                            checked = isDarkMode,
-                            onCheckedChange = { onToggleDarkMode() },
-                            colors = SwitchDefaults.colors(checkedThumbColor = currentPalette.primaryColor)
-                        )
                     }
+                }
+            }
 
-                    Spacer(modifier = Modifier.height(18.dp))
-
-                    // Color Theme Selector
-                    Text(
-                        text = "Accent Color Theme",
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = "Switch main app highlight & active tab color",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        contentPadding = PaddingValues(vertical = 4.dp)
-                    ) {
-                        items(AppThemePalette.values(), key = { it.id }) { palette ->
-                            val isSelected = palette == currentPalette
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(
-                                        if (isSelected) palette.primaryColor.copy(alpha = 0.15f)
-                                        else MaterialTheme.colorScheme.surfaceVariant
-                                    )
-                                    .border(
-                                        width = if (isSelected) 2.dp else 1.dp,
-                                        color = if (isSelected) palette.primaryColor else Color.Transparent,
-                                        shape = RoundedCornerShape(14.dp)
-                                    )
-                                    .clickable { onSelectPalette(palette) }
-                                    .padding(horizontal = 12.dp, vertical = 10.dp)
-                                    .testTag("theme_chip_${palette.id}")
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(22.dp)
-                                            .clip(CircleShape)
-                                            .background(palette.primaryColor),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        if (isSelected) {
-                                            Icon(
-                                                imageVector = Icons.Default.Check,
-                                                contentDescription = "Selected",
-                                                tint = Color.White,
-                                                modifier = Modifier.size(14.dp)
-                                            )
-                                        }
-                                    }
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = palette.displayName,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                        fontSize = 13.sp,
-                                        color = if (isSelected) palette.primaryColor else MaterialTheme.colorScheme.onSurface
-                                    )
+            // Inline Search Bar
+            AnimatedVisibility(visible = showSearch) {
+                Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        placeholder = { Text(LocalizationManager.getString("settings_search_placeholder", currentLanguage), fontSize = 14.sp) },
+                        singleLine = true,
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                        trailingIcon = {
+                            if (searchQuery.isNotEmpty()) {
+                                IconButton(onClick = { searchQuery = "" }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Clear")
                                 }
                             }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(20.dp))
-
-                    // Chat Wallpaper Background Selector
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Wallpaper,
-                            contentDescription = "Wallpaper",
-                            tint = currentPalette.primaryColor,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "Chat Background Wallpaper",
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                    Text(
-                        text = "Customize chat backdrops with built-in themes or photos from your gallery",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Prominent Custom Theme Gallery Card
-                    Card(
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (currentWallpaper == ChatWallpaper.CUSTOM) currentPalette.primaryColor.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = currentPalette.primaryColor,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
                         ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .border(
-                                width = if (currentWallpaper == ChatWallpaper.CUSTOM) 2.dp else 1.dp,
-                                color = if (currentWallpaper == ChatWallpaper.CUSTOM) currentPalette.primaryColor else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                                shape = RoundedCornerShape(16.dp)
-                            )
-                            .testTag("add_custom_wallpaper_card")
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(14.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // Custom Thumbnail or Add Icon
-                            Box(
-                                modifier = Modifier
-                                    .size(width = 68.dp, height = 80.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(currentPalette.primaryColor.copy(alpha = 0.15f)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                if (!customWallpaperUri.isNullOrBlank()) {
-                                    val scale = when (customWallpaperScale) {
-                                        "FIT" -> ContentScale.Fit
-                                        "FILL" -> ContentScale.FillBounds
-                                        else -> ContentScale.Crop
-                                    }
-                                    AsyncImage(
-                                        model = ImageRequest.Builder(LocalContext.current)
-                                            .data(customWallpaperUri)
-                                            .crossfade(true)
-                                            .build(),
-                                        contentDescription = "Custom Wallpaper",
-                                        contentScale = scale,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .background(Color.Black.copy(alpha = customWallpaperDimming))
-                                    )
-                                    if (currentWallpaper == ChatWallpaper.CUSTOM) {
-                                        Box(
-                                            modifier = Modifier
-                                                .align(Alignment.TopEnd)
-                                                .padding(4.dp)
-                                                .size(20.dp)
-                                                .clip(CircleShape)
-                                                .background(currentPalette.primaryColor),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(12.dp))
-                                        }
-                                    }
-                                } else {
-                                    Icon(
-                                        imageVector = Icons.Default.AddPhotoAlternate,
-                                        contentDescription = "Add Custom Photo",
-                                        tint = currentPalette.primaryColor,
-                                        modifier = Modifier.size(28.dp)
-                                    )
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.width(14.dp))
-
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = if (!customWallpaperUri.isNullOrBlank()) "Custom Gallery Wallpaper" else "Custom Theme / Gallery",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 14.sp,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = if (!customWallpaperUri.isNullOrBlank()) "Photo selected. Adjust scale or dimming overlay anytime." else "Choose any photo or design from your device gallery",
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 2
-                                )
-
-                                Spacer(modifier = Modifier.height(8.dp))
-
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Button(
-                                        onClick = { galleryLauncher.launch("image/*") },
-                                        colors = ButtonDefaults.buttonColors(containerColor = currentPalette.primaryColor),
-                                        shape = RoundedCornerShape(10.dp),
-                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                                        modifier = Modifier.height(34.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.AddPhotoAlternate,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = if (!customWallpaperUri.isNullOrBlank()) "Change Photo" else "+ Add Custom Wallpaper",
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                    }
-
-                                    if (!customWallpaperUri.isNullOrBlank()) {
-                                        OutlinedButton(
-                                            onClick = {
-                                                pendingCustomWallpaperUri = customWallpaperUri
-                                                showWallpaperPreviewDialog = true
-                                            },
-                                            shape = RoundedCornerShape(10.dp),
-                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-                                            modifier = Modifier.height(34.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Tune,
-                                                contentDescription = "Adjust",
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text("Adjust", fontSize = 12.sp)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    Text(
-                        text = "Built-in Themes & Patterns",
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        shape = RoundedCornerShape(24.dp),
+                        modifier = Modifier.fillMaxWidth()
                     )
+                }
+            }
 
-                    Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        contentPadding = PaddingValues(vertical = 4.dp)
-                    ) {
-                        items(ChatWallpaper.values().filter { it != ChatWallpaper.CUSTOM }, key = { it.id }) { wallpaper ->
-                            val isSelected = wallpaper == currentWallpaper
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .clickable { onSelectWallpaper(wallpaper) }
-                                    .testTag("wallpaper_item_${wallpaper.id}")
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(width = 84.dp, height = 110.dp)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .border(
-                                            width = if (isSelected) 3.dp else 1.dp,
-                                            color = if (isSelected) currentPalette.primaryColor else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
-                                            shape = RoundedCornerShape(12.dp)
-                                        )
-                                ) {
-                                    ChatWallpaperBackground(
-                                        wallpaper = wallpaper,
-                                        isDarkMode = isDarkMode,
-                                        customWallpaperUri = customWallpaperUri,
-                                        customWallpaperDimming = customWallpaperDimming,
-                                        customWallpaperScale = customWallpaperScale
-                                    ) {
-                                        // Mini Chat Bubble Mock inside wallpaper thumbnail
-                                        Column(
-                                            modifier = Modifier
-                                                .fillMaxSize()
-                                                .padding(6.dp),
-                                            verticalArrangement = Arrangement.SpaceEvenly
-                                        ) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(6.dp))
-                                                    .padding(horizontal = 6.dp, vertical = 4.dp)
-                                            ) {
-                                                Text("Hey 👋", fontSize = 8.sp, color = MaterialTheme.colorScheme.onSurface)
-                                            }
-                                            Box(
-                                                modifier = Modifier
-                                                    .align(Alignment.End)
-                                                    .background(currentPalette.primaryColor, RoundedCornerShape(6.dp))
-                                                    .padding(horizontal = 6.dp, vertical = 4.dp)
-                                            ) {
-                                                Text("Hi!", fontSize = 8.sp, color = Color.White)
-                                            }
-                                        }
-
-                                        if (isSelected) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .align(Alignment.TopEnd)
-                                                    .padding(4.dp)
-                                                    .size(20.dp)
-                                                    .clip(CircleShape)
-                                                    .background(currentPalette.primaryColor),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(12.dp))
-                                            }
-                                        }
-                                    }
-                                }
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = wallpaper.displayName,
-                                    fontSize = 11.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (isSelected) currentPalette.primaryColor else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+            // Centered Profile Header Section
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Box(
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .clickable {
+                            showAvatarBottomSheet = true
                         }
-                    }
-
-                    Spacer(modifier = Modifier.height(18.dp))
-
-                    // Live Interactive Preview Box
-                    Text(
-                        text = "Live Chat Preview",
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        .testTag("profile_avatar_clickable"),
+                    contentAlignment = Alignment.BottomEnd
+                ) {
+                    UserAvatar(
+                        name = user?.displayName ?: "User",
+                        avatarUri = user?.avatarUri,
+                        size = 96.dp
                     )
-                    Spacer(modifier = Modifier.height(6.dp))
-
                     Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .height(120.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
+                            .size(32.dp)
+                            .clip(CircleShape)
+                            .background(currentPalette.primaryColor)
+                            .border(2.dp, MaterialTheme.colorScheme.background, CircleShape),
+                        contentAlignment = Alignment.Center
                     ) {
-                        ChatWallpaperBackground(
-                            wallpaper = currentWallpaper,
-                            isDarkMode = isDarkMode,
-                            customWallpaperUri = customWallpaperUri,
-                            customWallpaperDimming = customWallpaperDimming,
-                            customWallpaperScale = customWallpaperScale
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(12.dp),
-                                verticalArrangement = Arrangement.Center
-                            ) {
-                                // Received bubble
-                                Box(
-                                    modifier = Modifier
-                                        .background(
-                                            if (isDarkMode) Color(0xFF1E293B) else Color.White,
-                                            RoundedCornerShape(topStart = 4.dp, topEnd = 12.dp, bottomStart = 12.dp, bottomEnd = 12.dp)
-                                        )
-                                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                                ) {
-                                    Text("How do you like this wallpaper & theme?", fontSize = 12.sp, color = if (isDarkMode) Color.White else Color(0xFF0F172A))
-                                }
-
-                                Spacer(modifier = Modifier.height(8.dp))
-
-                                // Sent bubble
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.End)
-                                        .background(
-                                            if (isDarkMode) currentPalette.sentBubbleDark else currentPalette.sentBubbleLight,
-                                            RoundedCornerShape(topStart = 12.dp, topEnd = 4.dp, bottomStart = 12.dp, bottomEnd = 12.dp)
-                                        )
-                                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                                ) {
-                                    Text("Looks amazing! Perfect colors ✨", fontSize = 12.sp, color = if (isDarkMode) Color.White else Color(0xFF065F46))
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Actionable Push Notifications Card
-            Card(
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("push_notifications_settings_card")
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            imageVector = Icons.Default.NotificationsActive,
-                            contentDescription = "Push Notifications",
-                            tint = currentPalette.primaryColor
+                            imageVector = Icons.Default.PhotoCamera,
+                            contentDescription = "Edit Profile Picture",
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = user?.displayName ?: "User Name",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 22.sp,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Status Bio Pill
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier
+                        .clickable {
+                            editDisplayName = user?.displayName ?: ""
+                            editStatusMessage = user?.statusMessage ?: ""
+                            showEditProfileDialog = true
+                        }
+                        .testTag("status_bio_pill")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Text(
-                            text = "Push Notification Center",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp,
-                            color = MaterialTheme.colorScheme.onSurface
+                            text = if (user?.statusMessage.isNullOrBlank()) "💬 Mid-week mood?" else "💬 ${user?.statusMessage}",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                }
 
-                    Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(4.dp))
 
-                    Text(
-                        text = "Alerts for new messages (with direct inline reply), incoming calls (with answer/decline), and friend requests.",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                Text(
+                    text = user?.email ?: "email@linko.com",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Settings Menu List Items
+            val query = searchQuery.trim().lowercase()
+
+            val menuItems = listOf(
+                SettingsMenuItemData(
+                    id = "payments",
+                    icon = Icons.Default.CreditCard,
+                    title = LocalizationManager.getString("item_payments", currentLanguage),
+                    subtitle = LocalizationManager.getString("item_payments_sub", currentLanguage),
+                    onClick = {
+                        Toast.makeText(context, "This feature is coming soon!", Toast.LENGTH_SHORT).show()
+                    }
+                ),
+                SettingsMenuItemData(
+                    id = "account",
+                    icon = Icons.Default.Key,
+                    title = LocalizationManager.getString("item_account", currentLanguage),
+                    subtitle = LocalizationManager.getString("item_account_sub", currentLanguage),
+                    onClick = { activeDialog = SettingsDialogType.ACCOUNT }
+                ),
+                SettingsMenuItemData(
+                    id = "privacy",
+                    icon = Icons.Default.Lock,
+                    title = LocalizationManager.getString("item_privacy", currentLanguage),
+                    subtitle = LocalizationManager.getString("item_privacy_sub", currentLanguage),
+                    onClick = { activeDialog = SettingsDialogType.PRIVACY }
+                ),
+                SettingsMenuItemData(
+                    id = "lists",
+                    icon = Icons.Default.ListAlt,
+                    title = LocalizationManager.getString("item_lists", currentLanguage),
+                    subtitle = LocalizationManager.getString("item_lists_sub", currentLanguage),
+                    onClick = { activeDialog = SettingsDialogType.LISTS }
+                ),
+                SettingsMenuItemData(
+                    id = "chats",
+                    icon = Icons.Default.Chat,
+                    title = LocalizationManager.getString("item_chats", currentLanguage),
+                    subtitle = LocalizationManager.getString("item_chats_sub", currentLanguage),
+                    onClick = { activeDialog = SettingsDialogType.CHATS }
+                ),
+                SettingsMenuItemData(
+                    id = "appearance",
+                    icon = Icons.Default.Palette,
+                    title = LocalizationManager.getString("item_appearance", currentLanguage),
+                    subtitle = LocalizationManager.getString("item_appearance_sub", currentLanguage),
+                    onClick = { activeDialog = SettingsDialogType.APPEARANCE }
+                ),
+                SettingsMenuItemData(
+                    id = "broadcasts",
+                    icon = Icons.Default.Campaign,
+                    title = LocalizationManager.getString("item_broadcasts", currentLanguage),
+                    subtitle = LocalizationManager.getString("item_broadcasts_sub", currentLanguage),
+                    onClick = { activeDialog = SettingsDialogType.BROADCASTS }
+                ),
+                SettingsMenuItemData(
+                    id = "notifications",
+                    icon = Icons.Default.Notifications,
+                    title = LocalizationManager.getString("item_notifications", currentLanguage),
+                    subtitle = LocalizationManager.getString("item_notifications_sub", currentLanguage),
+                    onClick = { activeDialog = SettingsDialogType.NOTIFICATIONS }
+                ),
+                SettingsMenuItemData(
+                    id = "storage",
+                    icon = Icons.Default.Storage,
+                    title = LocalizationManager.getString("item_storage", currentLanguage),
+                    subtitle = LocalizationManager.getString("item_storage_sub", currentLanguage),
+                    onClick = { activeDialog = SettingsDialogType.STORAGE }
+                ),
+                SettingsMenuItemData(
+                    id = "accessibility",
+                    icon = Icons.Default.Accessibility,
+                    title = LocalizationManager.getString("item_accessibility", currentLanguage),
+                    subtitle = LocalizationManager.getString("item_accessibility_sub", currentLanguage),
+                    onClick = { activeDialog = SettingsDialogType.ACCESSIBILITY }
+                ),
+                SettingsMenuItemData(
+                    id = "language",
+                    icon = Icons.Default.Language,
+                    title = LocalizationManager.getString("item_language", currentLanguage),
+                    subtitle = "${currentLanguage.nativeName} (${currentLanguage.displayName})",
+                    onClick = { activeDialog = SettingsDialogType.LANGUAGE }
+                ),
+                SettingsMenuItemData(
+                    id = "help",
+                    icon = Icons.Default.HelpOutline,
+                    title = LocalizationManager.getString("item_help", currentLanguage),
+                    subtitle = LocalizationManager.getString("item_help_sub", currentLanguage),
+                    onClick = { activeDialog = SettingsDialogType.HELP }
+                ),
+                SettingsMenuItemData(
+                    id = "invite",
+                    icon = Icons.Default.PersonAdd,
+                    title = LocalizationManager.getString("item_invite", currentLanguage),
+                    subtitle = LocalizationManager.getString("item_invite_sub", currentLanguage),
+                    onClick = {
+                        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_SUBJECT, "Join me on Linko!")
+                            putExtra(Intent.EXTRA_TEXT, "Hey! Download Linko for secure end-to-end encrypted chats and calls: https://linko.app/invite?user=${user?.username ?: "friend"}")
+                        }
+                        context.startActivity(Intent.createChooser(shareIntent, "Invite a Friend via"))
+                    }
+                ),
+                SettingsMenuItemData(
+                    id = "accounts_centre",
+                    icon = Icons.Default.AccountCircle,
+                    title = LocalizationManager.getString("item_accounts_centre", currentLanguage),
+                    subtitle = "Control cross-app experiences across Linko accounts",
+                    onClick = { activeDialog = SettingsDialogType.ACCOUNTS_CENTRE }
+                )
+            )
+
+            val filteredItems = if (query.isEmpty()) menuItems else menuItems.filter {
+                it.title.lowercase().contains(query) || it.subtitle.lowercase().contains(query)
+            }
+
+            Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                filteredItems.forEach { item ->
+                    SettingsListRow(
+                        icon = item.icon,
+                        title = item.title,
+                        subtitle = item.subtitle,
+                        accentColor = currentPalette.primaryColor,
+                        onClick = item.onClick,
+                        testTag = "settings_item_${item.id}"
                     )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Text(
-                        text = "Interactive Live Triggers",
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = "Tap any button below to trigger a live actionable system notification:",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Button 1: Simulate Message Notification
-                    Button(
-                        onClick = onTriggerMessageNotification,
-                        colors = ButtonDefaults.buttonColors(containerColor = currentPalette.primaryColor),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("simulate_message_notification_btn")
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(Icons.Default.Chat, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Simulate Message Alert (Direct Reply)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // Button 2: Simulate Call Notification
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = { onTriggerCallNotification(false) },
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("simulate_voice_call_btn")
-                        ) {
-                            Icon(Icons.Default.Call, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Voice Call Alert", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                        }
-
-                        OutlinedButton(
-                            onClick = { onTriggerCallNotification(true) },
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("simulate_video_call_btn")
-                        ) {
-                            Icon(Icons.Default.Call, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Video Call Alert", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // Button 3: Simulate Friend Request Notification
-                    Button(
-                        onClick = onTriggerFriendRequestNotification,
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("simulate_friend_request_btn")
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(Icons.Default.PersonAdd, contentDescription = null, tint = currentPalette.primaryColor, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Simulate Friend Request Alert", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = currentPalette.primaryColor)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Channel Status Toggles
-                    var notifyMessages by remember { mutableStateOf(true) }
-                    var notifyCalls by remember { mutableStateOf(true) }
-                    var notifyFriends by remember { mutableStateOf(true) }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("New Message Push Notifications", fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                        Switch(
-                            checked = notifyMessages,
-                            onCheckedChange = { notifyMessages = it },
-                            colors = SwitchDefaults.colors(checkedThumbColor = currentPalette.primaryColor)
-                        )
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("Voice & Video Incoming Call Banner", fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                        Switch(
-                            checked = notifyCalls,
-                            onCheckedChange = { notifyCalls = it },
-                            colors = SwitchDefaults.colors(checkedThumbColor = currentPalette.primaryColor)
-                        )
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("Friend Request Connection Alerts", fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                        Switch(
-                            checked = notifyFriends,
-                            onCheckedChange = { notifyFriends = it },
-                            colors = SwitchDefaults.colors(checkedThumbColor = currentPalette.primaryColor)
-                        )
-                    }
                 }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Email Transport Backend Server Status Card
-            Card(
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Email, contentDescription = "Email Transport", tint = currentPalette.primaryColor)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Email Transport Integration",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp
-                        )
-                    }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
 
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Text("Server: smtp.talepulse.net (Port 587)", fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text("Encryption: TLS 1.3 Active", fontSize = 12.sp, color = currentPalette.primaryColor)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text("Auto-mirroring chat dispatches to inbox verified.", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             // Logout Button
             Button(
                 onClick = onLogout,
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(48.dp)
+                    .padding(horizontal = 16.dp)
+                    .height(50.dp)
+                    .testTag("sign_out_button")
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.Logout,
@@ -920,6 +552,39 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onErrorContainer
                 )
             }
+
+            Spacer(modifier = Modifier.height(24.dp))
+        }
+
+        // QR Code Modal Dialog
+        if (showQrModal) {
+            AlertDialog(
+                onDismissRequest = { showQrModal = false },
+                title = { Text("My Profile QR Code", fontWeight = FontWeight.Bold) },
+                text = {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "Friends can scan this QR code with their camera to instantly add you on Linko.",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        QrCodeGenerator(payload = user?.qrPayload ?: "linko://user?email=${user?.email}")
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = user?.email ?: "",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showQrModal = false }) {
+                        Text("Close")
+                    }
+                }
+            )
         }
 
         // Edit Profile Dialog
@@ -940,8 +605,9 @@ fun SettingsScreen(
                         OutlinedTextField(
                             value = editStatusMessage,
                             onValueChange = { editStatusMessage = it },
-                            label = { Text("Status Message") },
+                            label = { Text("Status Bio") },
                             singleLine = true,
+                            placeholder = { Text("e.g. Mid-week mood?") },
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
@@ -964,6 +630,1035 @@ fun SettingsScreen(
                 }
             )
         }
+
+        // Sub-Dialogs for Active Features
+        when (activeDialog) {
+            SettingsDialogType.ACCOUNT -> AccountSettingsDialog(
+                user = user,
+                primaryColor = currentPalette.primaryColor,
+                onLogout = {
+                    activeDialog = SettingsDialogType.NONE
+                    onLogout()
+                },
+                onDismiss = { activeDialog = SettingsDialogType.NONE }
+            )
+            SettingsDialogType.PRIVACY -> PrivacySettingsDialog(
+                primaryColor = currentPalette.primaryColor,
+                onDismiss = { activeDialog = SettingsDialogType.NONE }
+            )
+            SettingsDialogType.LISTS -> ListsSettingsDialog(
+                primaryColor = currentPalette.primaryColor,
+                onDismiss = { activeDialog = SettingsDialogType.NONE }
+            )
+            SettingsDialogType.CHATS -> ChatsSettingsDialog(
+                currentWallpaper = currentWallpaper,
+                customWallpaperUri = customWallpaperUri,
+                customWallpaperDimming = customWallpaperDimming,
+                customWallpaperScale = customWallpaperScale,
+                isDarkMode = isDarkMode,
+                primaryColor = currentPalette.primaryColor,
+                onSelectWallpaper = onSelectWallpaper,
+                onPickCustomWallpaper = { galleryLauncher.launch("image/*") },
+                onDismiss = { activeDialog = SettingsDialogType.NONE }
+            )
+            SettingsDialogType.APPEARANCE -> AppearanceSettingsDialog(
+                isDarkMode = isDarkMode,
+                currentPalette = currentPalette,
+                onToggleDarkMode = onToggleDarkMode,
+                onSelectPalette = onSelectPalette,
+                onDismiss = { activeDialog = SettingsDialogType.NONE }
+            )
+            SettingsDialogType.BROADCASTS -> BroadcastsSettingsDialog(
+                primaryColor = currentPalette.primaryColor,
+                onDismiss = { activeDialog = SettingsDialogType.NONE }
+            )
+            SettingsDialogType.NOTIFICATIONS -> NotificationsSettingsDialog(
+                primaryColor = currentPalette.primaryColor,
+                onTriggerMessageNotification = onTriggerMessageNotification,
+                onTriggerCallNotification = onTriggerCallNotification,
+                onTriggerFriendRequestNotification = onTriggerFriendRequestNotification,
+                onDismiss = { activeDialog = SettingsDialogType.NONE }
+            )
+            SettingsDialogType.STORAGE -> StorageDataDashboardDialog(
+                primaryColor = currentPalette.primaryColor,
+                onDismiss = { activeDialog = SettingsDialogType.NONE }
+            )
+            SettingsDialogType.ACCESSIBILITY -> AccessibilitySettingsDialog(
+                primaryColor = currentPalette.primaryColor,
+                onDismiss = { activeDialog = SettingsDialogType.NONE }
+            )
+            SettingsDialogType.LANGUAGE -> LanguageSettingsDialog(
+                currentLanguage = currentLanguage,
+                primaryColor = currentPalette.primaryColor,
+                onSelectLanguage = onSelectLanguage,
+                onDismiss = { activeDialog = SettingsDialogType.NONE }
+            )
+            SettingsDialogType.HELP -> HelpSettingsDialog(
+                primaryColor = currentPalette.primaryColor,
+                onDismiss = { activeDialog = SettingsDialogType.NONE }
+            )
+            SettingsDialogType.ACCOUNTS_CENTRE -> AccountsCentreDialog(
+                user = user,
+                primaryColor = currentPalette.primaryColor,
+                onDismiss = { activeDialog = SettingsDialogType.NONE }
+            )
+            else -> {}
+        }
+
+        if (showAvatarBottomSheet) {
+            ModalBottomSheet(
+                onDismissRequest = { showAvatarBottomSheet = false },
+                containerColor = MaterialTheme.colorScheme.surface,
+                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 16.dp)
+                ) {
+                    Text(
+                        text = "Profile Photo",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    )
+
+                    // Option 1: Choose from Gallery
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable {
+                                showAvatarBottomSheet = false
+                                avatarGalleryLauncher.launch("image/*")
+                            }
+                            .padding(vertical = 14.dp, horizontal = 8.dp)
+                            .testTag("avatar_choose_gallery"),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PhotoLibrary,
+                            contentDescription = "Choose from Gallery",
+                            tint = currentPalette.primaryColor,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Text(
+                            text = "Choose from Gallery",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    // Option 2: Take Photo with Camera
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable {
+                                showAvatarBottomSheet = false
+                                if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                                    avatarCameraLauncher.launch(null)
+                                } else {
+                                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                }
+                            }
+                            .padding(vertical = 14.dp, horizontal = 8.dp)
+                            .testTag("avatar_take_photo"),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PhotoCamera,
+                            contentDescription = "Take Photo with Camera",
+                            tint = currentPalette.primaryColor,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Text(
+                            text = "Take Photo with Camera",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    // Option 3: Remove Profile Picture
+                    if (!user?.avatarUri.isNullOrBlank()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable {
+                                    showAvatarBottomSheet = false
+                                    onUpdateAvatarUri(null)
+                                }
+                                .padding(vertical = 14.dp, horizontal = 8.dp)
+                                .testTag("avatar_remove_photo"),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "Remove Profile Picture",
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Text(
+                                text = "Remove Profile Picture",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+                }
+            }
+        }
     }
 }
 
+private data class SettingsMenuItemData(
+    val id: String,
+    val icon: ImageVector,
+    val title: String,
+    val subtitle: String,
+    val onClick: () -> Unit
+)
+
+@Composable
+private fun SettingsListRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    accentColor: Color,
+    onClick: () -> Unit,
+    testTag: String
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .testTag(testTag),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(accentColor.copy(alpha = 0.12f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = title,
+                tint = accentColor,
+                modifier = Modifier.size(22.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.width(16.dp))
+
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = subtitle,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2
+            )
+        }
+
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+        )
+    }
+}
+
+// Sub-Dialogs implementations for active setting options
+
+@Composable
+private fun AccountSettingsDialog(
+    user: UserEntity?,
+    primaryColor: Color,
+    onLogout: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var securityNotifications by remember { mutableStateOf(true) }
+    var twoStepVerif by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Account Settings", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Text("Security Notifications", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Get security code notifications when a device logs in", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                    Switch(
+                        checked = securityNotifications,
+                        onCheckedChange = { securityNotifications = it },
+                        colors = SwitchDefaults.colors(checkedThumbColor = primaryColor)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text("Two-Step Verification", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Require a PIN when registering phone number again", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                    Switch(
+                        checked = twoStepVerif,
+                        onCheckedChange = { twoStepVerif = it },
+                        colors = SwitchDefaults.colors(checkedThumbColor = primaryColor)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text("Email Address", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Text(user?.email ?: "email@talepulse.com", fontSize = 12.sp, color = primaryColor)
+
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Sign Out Action Button
+                Button(
+                    onClick = {
+                        onDismiss()
+                        onLogout()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.6f),
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("account_settings_sign_out_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Logout,
+                        contentDescription = "Sign Out",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Sign Out",
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                TextButton(
+                    onClick = { /* Delete account */ },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Delete Account", fontWeight = FontWeight.Medium)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Done") }
+        }
+    )
+}
+
+@Composable
+private fun PrivacySettingsDialog(primaryColor: Color, onDismiss: () -> Unit) {
+    var readReceipts by remember { mutableStateOf(true) }
+    var appLock by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Privacy Controls", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Read Receipts", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                        Text("If turned off, you won't send or receive read receipts.", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(
+                        checked = readReceipts,
+                        onCheckedChange = { readReceipts = it },
+                        colors = SwitchDefaults.colors(checkedThumbColor = primaryColor)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("App Lock (Biometric / PIN)", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                        Text("Require biometric authentication to open Linko.", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(
+                        checked = appLock,
+                        onCheckedChange = { appLock = it },
+                        colors = SwitchDefaults.colors(checkedThumbColor = primaryColor)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text("Last Seen & Online", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Text("Everyone", fontSize = 12.sp, color = primaryColor)
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text("Profile Picture", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Text("My Contacts", fontSize = 12.sp, color = primaryColor)
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text("Blocked Contacts", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Text("0 contacts blocked", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Done") }
+        }
+    )
+}
+
+@Composable
+private fun ListsSettingsDialog(primaryColor: Color, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Lists Management", fontWeight = FontWeight.Bold) },
+        text = {
+            Column {
+                Text("Organize your people and groups into custom lists for quick filtering and broadcast messages.", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Button(
+                    onClick = { /* Create List */ },
+                    colors = ButtonDefaults.buttonColors(containerColor = primaryColor),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("+ Create New List")
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text("Default Lists", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Spacer(modifier = Modifier.height(6.dp))
+                Text("• Favorites (3 contacts)", fontSize = 12.sp)
+                Text("• Close Friends (5 contacts)", fontSize = 12.sp)
+                Text("• Work & Team (2 groups)", fontSize = 12.sp)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        }
+    )
+}
+
+@Composable
+private fun ChatsSettingsDialog(
+    currentWallpaper: ChatWallpaper,
+    customWallpaperUri: String?,
+    customWallpaperDimming: Float,
+    customWallpaperScale: String,
+    isDarkMode: Boolean,
+    primaryColor: Color,
+    onSelectWallpaper: (ChatWallpaper) -> Unit,
+    onPickCustomWallpaper: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var mediaVisibility by remember { mutableStateOf(true) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Chat Settings", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Media Visibility", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                        Text("Show newly downloaded media in device gallery.", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(
+                        checked = mediaVisibility,
+                        onCheckedChange = { mediaVisibility = it },
+                        colors = SwitchDefaults.colors(checkedThumbColor = primaryColor)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text("Chat Wallpaper", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Button(
+                    onClick = onPickCustomWallpaper,
+                    colors = ButtonDefaults.buttonColors(containerColor = primaryColor),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Select Custom Gallery Backdrop")
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(ChatWallpaper.values().filter { it != ChatWallpaper.CUSTOM }) { wallpaper ->
+                        val isSelected = wallpaper == currentWallpaper
+                        Box(
+                            modifier = Modifier
+                                .size(width = 60.dp, height = 80.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .border(
+                                    width = if (isSelected) 2.dp else 1.dp,
+                                    color = if (isSelected) primaryColor else Color.Gray,
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+                                .clickable { onSelectWallpaper(wallpaper) }
+                        ) {
+                            ChatWallpaperBackground(
+                                wallpaper = wallpaper,
+                                isDarkMode = isDarkMode,
+                                customWallpaperUri = customWallpaperUri,
+                                customWallpaperDimming = customWallpaperDimming,
+                                customWallpaperScale = customWallpaperScale
+                            ) {}
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Button(
+                    onClick = { /* Backup */ },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Chat Backup & Restore", color = primaryColor, fontWeight = FontWeight.Bold)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Done") }
+        }
+    )
+}
+
+@Composable
+private fun AppearanceSettingsDialog(
+    isDarkMode: Boolean,
+    currentPalette: AppThemePalette,
+    onToggleDarkMode: () -> Unit,
+    onSelectPalette: (AppThemePalette) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Appearance Settings", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.DarkMode, contentDescription = null, tint = currentPalette.primaryColor)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Dark Theme Mode", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    }
+                    Switch(
+                        checked = isDarkMode,
+                        onCheckedChange = { onToggleDarkMode() },
+                        colors = SwitchDefaults.colors(checkedThumbColor = currentPalette.primaryColor)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text("App Accent Color Theme", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(AppThemePalette.values()) { palette ->
+                        val isSelected = palette == currentPalette
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (isSelected) palette.primaryColor.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant)
+                                .border(if (isSelected) 2.dp else 0.dp, palette.primaryColor, RoundedCornerShape(12.dp))
+                                .clickable { onSelectPalette(palette) }
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            Text(palette.displayName, color = if (isSelected) palette.primaryColor else MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Done") }
+        }
+    )
+}
+
+@Composable
+private fun BroadcastsSettingsDialog(primaryColor: Color, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Broadcast Lists", fontWeight = FontWeight.Bold) },
+        text = {
+            Column {
+                Text("Send messages to multiple contacts simultaneously without creating a group chat.", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Button(
+                    onClick = { /* New broadcast */ },
+                    colors = ButtonDefaults.buttonColors(containerColor = primaryColor),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("+ Create New Broadcast List")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        }
+    )
+}
+
+@Composable
+private fun NotificationsSettingsDialog(
+    primaryColor: Color,
+    onTriggerMessageNotification: () -> Unit,
+    onTriggerCallNotification: (isVideo: Boolean) -> Unit,
+    onTriggerFriendRequestNotification: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Notification Tones & Push Alerts", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Text("Live Immediate Triggers", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Button(
+                    onClick = onTriggerMessageNotification,
+                    colors = ButtonDefaults.buttonColors(containerColor = primaryColor),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Trigger Instant Message Alert")
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = { onTriggerCallNotification(false) },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Call, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Voice Call", fontSize = 12.sp)
+                    }
+
+                    OutlinedButton(
+                        onClick = { onTriggerCallNotification(true) },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Call, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Video Call", fontSize = 12.sp)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Button(
+                    onClick = onTriggerFriendRequestNotification,
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Trigger Friend Request Alert", color = primaryColor)
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text("Background / Offline Push Tests (5s Delay)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Tap a button below, then minimize Tale Pulse or lock your device. A push notification will arrive in 5 seconds to test background receipt.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+
+                OutlinedButton(
+                    onClick = {
+                        com.example.notification.ScheduledNotificationReceiver.scheduleBackgroundPush(
+                            context = context,
+                            type = com.example.notification.ScheduledNotificationReceiver.TYPE_MESSAGE,
+                            delaySeconds = 5,
+                            messageText = "Message received while Tale Pulse was in background! 📩"
+                        )
+                        Toast.makeText(context, "Background Message Push scheduled in 5 seconds! Minimize the app now.", Toast.LENGTH_LONG).show()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("⏳ Message Push (5s Delay)")
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                OutlinedButton(
+                    onClick = {
+                        com.example.notification.ScheduledNotificationReceiver.scheduleBackgroundPush(
+                            context = context,
+                            type = com.example.notification.ScheduledNotificationReceiver.TYPE_CALL,
+                            delaySeconds = 5,
+                            isVideoCall = true
+                        )
+                        Toast.makeText(context, "Background Call Push scheduled in 5 seconds! Minimize the app now.", Toast.LENGTH_LONG).show()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("⏳ Incoming Call Push (5s Delay)")
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                OutlinedButton(
+                    onClick = {
+                        com.example.notification.ScheduledNotificationReceiver.scheduleBackgroundPush(
+                            context = context,
+                            type = com.example.notification.ScheduledNotificationReceiver.TYPE_FRIEND_REQUEST,
+                            delaySeconds = 5
+                        )
+                        Toast.makeText(context, "Background Friend Request Push scheduled in 5 seconds! Minimize the app now.", Toast.LENGTH_LONG).show()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("⏳ Friend Request Push (5s Delay)")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Done") }
+        }
+    )
+}
+
+@Composable
+private fun AccessibilitySettingsDialog(primaryColor: Color, onDismiss: () -> Unit) {
+    var highContrast by remember { mutableStateOf(false) }
+    var reduceAnimations by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Accessibility Options", fontWeight = FontWeight.Bold) },
+        text = {
+            Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Increase Visual Contrast", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Switch(
+                        checked = highContrast,
+                        onCheckedChange = { highContrast = it },
+                        colors = SwitchDefaults.colors(checkedThumbColor = primaryColor)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Reduce UI Animations", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Switch(
+                        checked = reduceAnimations,
+                        onCheckedChange = { reduceAnimations = it },
+                        colors = SwitchDefaults.colors(checkedThumbColor = primaryColor)
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Done") }
+        }
+    )
+}
+
+@Composable
+private fun LanguageSettingsDialog(
+    currentLanguage: AppLanguage,
+    primaryColor: Color,
+    onSelectLanguage: (AppLanguage) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var searchQuery by remember { mutableStateOf("") }
+    val allLanguages = remember { AppLanguage.sortedAlphabetically() }
+    val filteredLanguages = remember(searchQuery) {
+        if (searchQuery.isBlank()) {
+            allLanguages
+        } else {
+            allLanguages.filter {
+                it.displayName.contains(searchQuery, ignoreCase = true) ||
+                it.nativeName.contains(searchQuery, ignoreCase = true) ||
+                it.code.contains(searchQuery, ignoreCase = true)
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text(
+                    text = LocalizationManager.getString("item_language", currentLanguage),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 20.sp
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "${allLanguages.size} Universal Global Languages (A-Z)",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Search language (A-Z)...", fontSize = 13.sp) },
+                    singleLine = true,
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Default.Close, contentDescription = "Clear", modifier = Modifier.size(18.dp))
+                            }
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp),
+                    shape = RoundedCornerShape(12.dp)
+                )
+
+                if (filteredLanguages.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "No matching language found",
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 350.dp)
+                    ) {
+                        items(filteredLanguages, key = { it.code }) { lang ->
+                            val isSelected = lang == currentLanguage
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        onSelectLanguage(lang)
+                                        onDismiss()
+                                    }
+                                    .padding(vertical = 10.dp, horizontal = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = lang.nativeName,
+                                        fontSize = 15.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (isSelected) primaryColor else MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = lang.displayName,
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                if (isSelected) {
+                                    Icon(Icons.Default.Check, contentDescription = "Selected", tint = primaryColor)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(LocalizationManager.getString("btn_done", currentLanguage)) }
+        }
+    )
+}
+
+@Composable
+private fun HelpSettingsDialog(primaryColor: Color, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Help & Feedback", fontWeight = FontWeight.Bold) },
+        text = {
+            Column {
+                Text("Linko Version 2.5.0 (Build 2026)", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("End-to-End Encrypted Messaging & Calls Platform.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                TextButton(onClick = {}, colors = ButtonDefaults.textButtonColors(contentColor = primaryColor)) {
+                    Text("Visit Help Centre")
+                }
+                TextButton(onClick = {}, colors = ButtonDefaults.textButtonColors(contentColor = primaryColor)) {
+                    Text("Contact Support Team")
+                }
+                TextButton(onClick = {}, colors = ButtonDefaults.textButtonColors(contentColor = primaryColor)) {
+                    Text("Privacy Policy & Terms")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        }
+    )
+}
+
+@Composable
+private fun AccountsCentreDialog(user: UserEntity?, primaryColor: Color, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Accounts Centre", fontWeight = FontWeight.Bold) },
+        text = {
+            Column {
+                Text("Manage your connected Linko profile and cross-device sync preferences.", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text("Connected Account", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(user?.displayName ?: "User", fontSize = 14.sp, color = primaryColor)
+                        Text(user?.email ?: "email@linko.com", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        }
+    )
+}
+
+private fun copyUriToInternalStorage(context: Context, uri: Uri): String {
+    return try {
+        val file = File(context.filesDir, "avatar_${System.currentTimeMillis()}.png")
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            FileOutputStream(file).use { output ->
+                input.copyTo(output)
+            }
+        }
+        Uri.fromFile(file).toString()
+    } catch (e: Exception) {
+        e.printStackTrace()
+        uri.toString()
+    }
+}
+
+private fun saveBitmapToInternalStorage(context: Context, bitmap: Bitmap): String {
+    return try {
+        val file = File(context.filesDir, "avatar_${System.currentTimeMillis()}.png")
+        FileOutputStream(file).use { out ->
+            bitmap.compress(Bitmap.CompressFormat.PNG, 95, out)
+        }
+        Uri.fromFile(file).toString()
+    } catch (e: Exception) {
+        e.printStackTrace()
+        ""
+    }
+}

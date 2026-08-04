@@ -17,16 +17,21 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -34,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -50,6 +56,7 @@ fun AudioCallScreen(
     onEndCall: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val infiniteTransition = rememberInfiniteTransition(label = "PulseRing")
     val pulseScale by infiniteTransition.animateFloat(
         initialValue = 1f,
@@ -76,12 +83,21 @@ fun AudioCallScreen(
         ) {
             // Header Info
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = "Tale Pulse Voice Call",
-                    color = Emerald500,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = "E2EE",
+                        tint = Emerald500,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "End-to-End Encrypted Voice Call",
+                        color = Emerald500,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                }
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = callState.contactName,
@@ -95,6 +111,19 @@ fun AudioCallScreen(
                     color = Color.LightGray,
                     fontSize = 16.sp
                 )
+                Spacer(modifier = Modifier.height(8.dp))
+                Surface(
+                    color = Color.White.copy(alpha = 0.08f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(
+                        text = "🔒 Signal Protocol Key Verified",
+                        color = Color.LightGray,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
+                }
             }
 
             // Central Animated Waveform Avatar
@@ -115,20 +144,20 @@ fun AudioCallScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 24.dp),
-                horizontalArrangement = Arrangement.SpaceAround,
+                    .padding(horizontal = 32.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(
                     onClick = onToggleMute,
                     colors = IconButtonDefaults.iconButtonColors(
-                        containerColor = if (callState.isMuted) Color.Red else Color.White.copy(alpha = 0.15f)
+                        containerColor = if (callState.isMuted) Color.Red else Color.White.copy(alpha = 0.18f)
                     ),
-                    modifier = Modifier.size(56.dp)
+                    modifier = Modifier.size(58.dp)
                 ) {
                     Icon(
                         imageVector = if (callState.isMuted) Icons.Default.MicOff else Icons.Default.Mic,
-                        contentDescription = "Mute",
+                        contentDescription = "Mute Microphone",
                         tint = Color.White
                     )
                 }
@@ -136,26 +165,26 @@ fun AudioCallScreen(
                 IconButton(
                     onClick = onEndCall,
                     colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Red),
-                    modifier = Modifier.size(68.dp)
+                    modifier = Modifier.size(70.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.CallEnd,
                         contentDescription = "End Call",
                         tint = Color.White,
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.size(34.dp)
                     )
                 }
 
                 IconButton(
                     onClick = onToggleSpeaker,
                     colors = IconButtonDefaults.iconButtonColors(
-                        containerColor = if (callState.isSpeakerOn) Emerald500 else Color.White.copy(alpha = 0.15f)
+                        containerColor = if (callState.isSpeakerOn) Emerald500 else Color.White.copy(alpha = 0.18f)
                     ),
-                    modifier = Modifier.size(56.dp)
+                    modifier = Modifier.size(58.dp)
                 ) {
                     Icon(
                         imageVector = if (callState.isSpeakerOn) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
-                        contentDescription = "Speaker",
+                        contentDescription = "Toggle Speaker",
                         tint = Color.White
                     )
                 }

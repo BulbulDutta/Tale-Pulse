@@ -1,5 +1,8 @@
 package com.example.ui.screens.calls
 
+import android.widget.Toast
+import androidx.compose.ui.platform.LocalContext
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -21,6 +24,7 @@ import androidx.compose.material.icons.automirrored.filled.CallMade
 import androidx.compose.material.icons.automirrored.filled.CallReceived
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhoneInTalk
 import androidx.compose.material.icons.filled.Search
@@ -60,16 +64,20 @@ import java.util.Locale
 
 @Composable
 fun CallsScreen(
+
     callLogs: List<CallLogEntity>,
     contacts: List<ContactEntity> = emptyList(),
     onStartCall: (contactName: String, contactEmail: String, contactAvatar: String?, callType: CallType) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     var showStartCallModal by remember { mutableStateOf(false) }
+    var selectedCallTypeFilter by remember { mutableStateOf<CallType?>(null) }
 
     if (showStartCallModal) {
         StartCallDialog(
             contacts = contacts,
+            initialCallType = selectedCallTypeFilter ?: CallType.AUDIO,
             onStartCall = { name, email, avatar, type ->
                 showStartCallModal = false
                 onStartCall(name, email, avatar, type)
@@ -94,25 +102,31 @@ fun CallsScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Button(
-                    onClick = { showStartCallModal = true },
+                    onClick = {
+                        selectedCallTypeFilter = CallType.AUDIO
+                        showStartCallModal = true
+                    },
                     colors = ButtonDefaults.buttonColors(containerColor = Emerald500),
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Icon(Icons.Default.Call, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Call, contentDescription = "Voice Call", tint = Color.White, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Audio Call", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text("New Voice Call", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
 
                 Button(
-                    onClick = { showStartCallModal = true },
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    onClick = {
+                        selectedCallTypeFilter = CallType.VIDEO
+                        showStartCallModal = true
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Icon(Icons.Default.Videocam, contentDescription = null, tint = Emerald500, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Videocam, contentDescription = "Video Call", tint = Color.White, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Video Call", color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text("New Video Call", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
             }
 
@@ -212,12 +226,21 @@ private fun CallLogItemRow(
             Spacer(modifier = Modifier.width(14.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = log.contactName,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp,
-                    color = if (log.isMissed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = log.contactName,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        color = if (log.isMissed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = "Encrypted Call",
+                        tint = Emerald500,
+                        modifier = Modifier.size(12.dp)
+                    )
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = if (log.isIncoming) Icons.AutoMirrored.Filled.CallReceived else Icons.AutoMirrored.Filled.CallMade,
@@ -227,7 +250,7 @@ private fun CallLogItemRow(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "${formatDateTime(log.timestamp)} • ${if (log.durationSeconds > 0) "${log.durationSeconds}s" else "Missed"}",
+                        text = "${formatDateTime(log.timestamp)} • ${if (log.durationSeconds > 0) "${log.durationSeconds}s" else "Missed"} • E2EE",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -259,6 +282,7 @@ private fun CallLogItemRow(
 @Composable
 private fun StartCallDialog(
     contacts: List<ContactEntity>,
+    initialCallType: CallType = CallType.AUDIO,
     onStartCall: (name: String, email: String, avatar: String?, type: CallType) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -382,7 +406,7 @@ private fun StartCallDialog(
                 Button(
                     onClick = {
                         val name = manualName.ifBlank { "Contact" }
-                        val email = manualEmail.ifBlank { "${name.lowercase().replace(" ", ".")}@talepulse.com" }
+                        val email = manualEmail.ifBlank { "${name.lowercase().replace(" ", ".")}@linko.com" }
                         onStartCall(name, email, null, CallType.AUDIO)
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Emerald500),
@@ -396,7 +420,7 @@ private fun StartCallDialog(
                 Button(
                     onClick = {
                         val name = manualName.ifBlank { "Contact" }
-                        val email = manualEmail.ifBlank { "${name.lowercase().replace(" ", ".")}@talepulse.com" }
+                        val email = manualEmail.ifBlank { "${name.lowercase().replace(" ", ".")}@linko.com" }
                         onStartCall(name, email, null, CallType.VIDEO)
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Emerald500),

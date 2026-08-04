@@ -1,6 +1,6 @@
 {
-  "name": "Tale Pulse",
-  "description": "A sleek, WhatsApp-inspired messaging application featuring email-based backend logic, QR code friend additions, 1-on-1 and group chats with media attachments, and audio/video calling UI.",
+  "name": "Linko",
+  "description": "Linko messaging and connectivity app featuring push notifications, QR scan contact sync, group management, audio notes, and rich messaging.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

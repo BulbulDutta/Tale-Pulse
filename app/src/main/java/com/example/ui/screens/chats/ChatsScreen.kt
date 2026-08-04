@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AddComment
 import androidx.compose.material.icons.filled.GroupAdd
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Badge
@@ -55,6 +56,9 @@ import com.example.ui.components.AdBannerView
 import com.example.ui.components.EmailTransportBadge
 import com.example.ui.components.UserAvatar
 import com.example.ui.theme.Emerald500
+import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
+import com.example.R
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -63,10 +67,14 @@ import java.util.Locale
 fun ChatsScreen(
     chats: List<ChatEntity>,
     contacts: List<ContactEntity>,
+    currentLanguage: com.example.util.AppLanguage = com.example.util.AppLanguage.ENGLISH,
     onSelectChat: (String) -> Unit,
     onOpenGeminiClick: () -> Unit,
     onCreateGroupClick: () -> Unit,
     onAddContactClick: () -> Unit,
+    onOpenContactChat: ((ContactEntity) -> Unit)? = null,
+    isUserOnline: (String?) -> Boolean = { false },
+    isChatOnline: (ChatEntity) -> Boolean = { false },
     modifier: Modifier = Modifier
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -91,17 +99,47 @@ fun ChatsScreen(
             .background(MaterialTheme.colorScheme.background)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
+            // Header Title Bar with Linko Logo
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Image(
+                        painter = painterResource(id = R.drawable.ic_linko_logo),
+                        contentDescription = "Linko Logo",
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = "Linko",
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = com.example.ui.theme.Emerald500
+                )
+            }
+
             // Header Search Bar
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surface)
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
             ) {
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
-                    placeholder = { Text("Search chats or messages...", fontSize = 14.sp) },
+                    placeholder = { Text(com.example.util.LocalizationManager.getString("chats_search_placeholder", currentLanguage), fontSize = 14.sp) },
                     leadingIcon = {
                         Icon(
                             imageVector = Icons.Default.Search,
@@ -180,15 +218,22 @@ fun ChatsScreen(
                     }
 
                     items(contacts) { contact ->
+                        val isOnline = isUserOnline(contact.contactEmail)
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier
                                 .padding(end = 12.dp)
                                 .clickable {
-                                    // Quick contact action
+                                    onOpenContactChat?.invoke(contact)
                                 }
                         ) {
-                            UserAvatar(name = contact.contactDisplayName, size = 48.dp)
+                            UserAvatar(
+                                name = contact.contactDisplayName,
+                                avatarUri = contact.contactAvatarUri,
+                                size = 48.dp,
+                                showOnlineStatus = true,
+                                isOnline = isOnline
+                            )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = contact.contactDisplayName.substringBefore(" "),
@@ -273,8 +318,10 @@ fun ChatsScreen(
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(filteredChats, key = { it.id }) { chat ->
+                        val isOnline = isChatOnline(chat)
                         ChatItemRow(
                             chat = chat,
+                            isOnline = isOnline,
                             onClick = { onSelectChat(chat.id) }
                         )
                     }
@@ -314,6 +361,7 @@ fun ChatsScreen(
 @Composable
 private fun ChatItemRow(
     chat: ChatEntity,
+    isOnline: Boolean = false,
     onClick: () -> Unit
 ) {
     Card(
@@ -331,8 +379,11 @@ private fun ChatItemRow(
         ) {
             UserAvatar(
                 name = chat.name,
+                avatarUri = chat.groupIconUri,
                 isGroup = chat.isGroup,
-                size = 52.dp
+                size = 52.dp,
+                showOnlineStatus = true,
+                isOnline = isOnline
             )
 
             Spacer(modifier = Modifier.width(14.dp))
@@ -348,9 +399,16 @@ private fun ChatItemRow(
                         fontSize = 16.sp,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
+                        overflow = TextOverflow.Ellipsis
                     )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = "End-to-End Encrypted",
+                        tint = Emerald500,
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
 
                     Text(
                         text = formatTime(chat.lastMessageTimestamp),
@@ -395,7 +453,31 @@ private fun ChatItemRow(
 }
 
 private fun formatTime(timestamp: Long): String {
+    if (timestamp <= 0) return ""
+    val now = System.currentTimeMillis()
     val date = Date(timestamp)
-    val sdf = SimpleDateFormat("h:mm a", Locale.getDefault())
-    return sdf.format(date)
+
+    return when {
+        isSameDay(now, timestamp) -> {
+            SimpleDateFormat("h:mm a", Locale.getDefault()).format(date)
+        }
+        isYesterday(now, timestamp) -> {
+            "Yesterday"
+        }
+        else -> {
+            SimpleDateFormat("MMM d", Locale.getDefault()).format(date)
+        }
+    }
+}
+
+private fun isSameDay(t1: Long, t2: Long): Boolean {
+    val fmt = SimpleDateFormat("yyyyMMdd", Locale.getDefault())
+    return fmt.format(Date(t1)) == fmt.format(Date(t2))
+}
+
+private fun isYesterday(now: Long, t: Long): Boolean {
+    val cal1 = java.util.Calendar.getInstance().apply { timeInMillis = now; add(java.util.Calendar.DAY_OF_YEAR, -1) }
+    val cal2 = java.util.Calendar.getInstance().apply { timeInMillis = t }
+    return cal1.get(java.util.Calendar.YEAR) == cal2.get(java.util.Calendar.YEAR) &&
+            cal1.get(java.util.Calendar.DAY_OF_YEAR) == cal2.get(java.util.Calendar.DAY_OF_YEAR)
 }

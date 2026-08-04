@@ -2,7 +2,7 @@ package com.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Tale Pulse Palette - Modern WhatsApp & Slate Aesthetic
+// Linko Palette - Modern WhatsApp & Slate Aesthetic
 val Emerald500 = Color(0xFF10B981)
 val Emerald600 = Color(0xFF059669)
 val Emerald700 = Color(0xFF047857)

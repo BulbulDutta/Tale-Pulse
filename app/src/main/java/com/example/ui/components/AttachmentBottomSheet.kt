@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Poll
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -51,7 +52,8 @@ enum class AttachmentType {
     CONTACT,
     POLL,
     EVENT,
-    AI_IMAGE
+    AI_IMAGE,
+    IN_APP_CALL
 }
 
 private data class AttachmentOptionItem(
@@ -122,6 +124,12 @@ fun AttachmentBottomSheet(
             title = "AI Image",
             icon = Icons.Default.AutoAwesome,
             backgroundColor = Color(0xFF6200EE)
+        ),
+        AttachmentOptionItem(
+            type = AttachmentType.IN_APP_CALL,
+            title = "Google Meet",
+            icon = Icons.Default.Videocam,
+            backgroundColor = Color(0xFF00897B)
         )
     )
 

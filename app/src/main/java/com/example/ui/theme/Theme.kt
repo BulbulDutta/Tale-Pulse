@@ -121,7 +121,7 @@ fun getLightColorScheme(palette: AppThemePalette): ColorScheme {
 }
 
 @Composable
-fun TalePulseTheme(
+fun LinkoTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     palette: AppThemePalette = AppThemePalette.EMERALD,
     content: @Composable () -> Unit
@@ -133,5 +133,14 @@ fun TalePulseTheme(
         typography = Typography,
         content = content
     )
+}
+
+@Composable
+fun TalePulseTheme(
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    palette: AppThemePalette = AppThemePalette.EMERALD,
+    content: @Composable () -> Unit
+) {
+    LinkoTheme(darkTheme = darkTheme, palette = palette, content = content)
 }
 

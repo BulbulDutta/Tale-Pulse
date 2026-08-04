@@ -134,7 +134,7 @@ fun CreateGroupScreen(
                     value = groupName,
                     onValueChange = { groupName = it },
                     label = { Text("Group Name") },
-                    placeholder = { Text("e.g. Design & Engineering Pulse") },
+                    placeholder = { Text("e.g. Project Team") },
                     singleLine = true,
                     modifier = Modifier.weight(1f)
                 )
