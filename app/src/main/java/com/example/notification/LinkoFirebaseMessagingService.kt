@@ -30,31 +30,56 @@ class LinkoFirebaseMessagingService : FirebaseMessagingService() {
             ?: ""
 
         when {
-            // New Chat Message Payload
-            type.contains("message", ignoreCase = true) || type == ScheduledNotificationReceiver.TYPE_MESSAGE -> {
+            // New Chat Message Payload (Direct or Group)
+            type.contains("message", ignoreCase = true) || type == ScheduledNotificationReceiver.TYPE_MESSAGE || type == ScheduledNotificationReceiver.TYPE_GROUP_MESSAGE -> {
                 val chatId = data["chat_id"] ?: data["chatId"] ?: "chat_1"
                 val senderName = data["sender_name"] ?: data["sender"] ?: notification?.title ?: "Linko Contact"
                 val messageText = data["message_text"] ?: data["message"] ?: notification?.body ?: "New message received on Linko"
+                val isGroup = data["is_group"] == "true" || data["chat_type"] == "group" || type == ScheduledNotificationReceiver.TYPE_GROUP_MESSAGE
 
                 NotificationHelper.showNewMessageNotification(
                     context = applicationContext,
                     chatId = chatId,
                     senderName = senderName,
-                    messageText = messageText
+                    messageText = messageText,
+                    isGroup = isGroup
                 )
             }
-            // Incoming Call Payload (Voice or Video)
-            type.contains("call", ignoreCase = true) || type == ScheduledNotificationReceiver.TYPE_CALL -> {
+            // Missed Call Payload
+            type.contains("missed", ignoreCase = true) || type == ScheduledNotificationReceiver.TYPE_MISSED_CALL -> {
                 val callerName = data["caller_name"] ?: data["caller"] ?: notification?.title ?: "Marcus Miller"
                 val callerEmail = data["caller_email"] ?: data["email"] ?: "marcus@linko.com"
                 val callType = data["call_type"] ?: data["callType"] ?: "Voice"
 
-                NotificationHelper.showIncomingCallNotification(
+                NotificationHelper.showMissedCallNotification(
                     context = applicationContext,
                     callerName = callerName,
                     callerEmail = callerEmail,
                     callType = callType
                 )
+            }
+            // Incoming Call Payload (Voice or Video)
+            type.contains("call", ignoreCase = true) || type == ScheduledNotificationReceiver.TYPE_CALL -> {
+                val isMissed = data["status"] == "missed" || data["missed"] == "true"
+                val callerName = data["caller_name"] ?: data["caller"] ?: notification?.title ?: "Marcus Miller"
+                val callerEmail = data["caller_email"] ?: data["email"] ?: "marcus@linko.com"
+                val callType = data["call_type"] ?: data["callType"] ?: "Voice"
+
+                if (isMissed) {
+                    NotificationHelper.showMissedCallNotification(
+                        context = applicationContext,
+                        callerName = callerName,
+                        callerEmail = callerEmail,
+                        callType = callType
+                    )
+                } else {
+                    NotificationHelper.showIncomingCallNotification(
+                        context = applicationContext,
+                        callerName = callerName,
+                        callerEmail = callerEmail,
+                        callType = callType
+                    )
+                }
             }
             // Friend Request Payload
             type.contains("friend", ignoreCase = true) || type == ScheduledNotificationReceiver.TYPE_FRIEND_REQUEST -> {

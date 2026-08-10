@@ -11,17 +11,112 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.RemoteInput
 import com.example.MainActivity
 
+enum class NotificationSoundProfile(
+    val id: String,
+    val title: String,
+    val description: String,
+    val systemSoundType: Int,
+    val toneType: Int
+) {
+    CHIME_PULSE(
+        id = "chime_pulse",
+        title = "Chime & Pulse 🔔",
+        description = "High-pitch soft notification chime",
+        systemSoundType = android.media.RingtoneManager.TYPE_NOTIFICATION,
+        toneType = android.media.ToneGenerator.TONE_PROP_BEEP
+    ),
+    SUBTLE_POP(
+        id = "subtle_pop",
+        title = "Subtle Pop 💬",
+        description = "Quiet double-tap pop for discrete alerts",
+        systemSoundType = android.media.RingtoneManager.TYPE_NOTIFICATION,
+        toneType = android.media.ToneGenerator.TONE_PROP_PROMPT
+    ),
+    GENTLE_BELL(
+        id = "gentle_bell",
+        title = "Gentle Bell 🛎️",
+        description = "Melodic bell echo tone",
+        systemSoundType = android.media.RingtoneManager.TYPE_NOTIFICATION,
+        toneType = android.media.ToneGenerator.TONE_SUP_RINGTONE
+    ),
+    UPBEAT_SPARK(
+        id = "upbeat_spark",
+        title = "Upbeat Spark ✨",
+        description = "Energetic multi-tone alert",
+        systemSoundType = android.media.RingtoneManager.TYPE_NOTIFICATION,
+        toneType = android.media.ToneGenerator.TONE_CDMA_HIGH_L
+    ),
+    GROUP_HARMONY(
+        id = "group_harmony",
+        title = "Group Harmony 👥",
+        description = "Multi-step chord tuned for lively group discussions",
+        systemSoundType = android.media.RingtoneManager.TYPE_NOTIFICATION,
+        toneType = android.media.ToneGenerator.TONE_CDMA_INTERCEPT
+    ),
+    DOUBLE_CHIME(
+        id = "double_chime",
+        title = "Double Chime 🎶",
+        description = "Distinctive double-pulse chime for group messages",
+        systemSoundType = android.media.RingtoneManager.TYPE_NOTIFICATION,
+        toneType = android.media.ToneGenerator.TONE_CDMA_ALERT_NETWORK_LITE
+    ),
+    SYSTEM_DEFAULT(
+        id = "system_default",
+        title = "Default System Tone 📱",
+        description = "Standard system notification sound",
+        systemSoundType = android.media.RingtoneManager.TYPE_NOTIFICATION,
+        toneType = android.media.ToneGenerator.TONE_PROP_BEEP
+    ),
+    SILENT(
+        id = "silent",
+        title = "Silent / Vibrate Only 🔇",
+        description = "No audio, tactile vibration only",
+        systemSoundType = -1,
+        toneType = -1
+    );
+
+    companion object {
+        fun fromId(id: String, default: NotificationSoundProfile = SYSTEM_DEFAULT): NotificationSoundProfile {
+            return values().find { it.id == id } ?: default
+        }
+
+        val directMessageProfiles = listOf(
+            CHIME_PULSE,
+            SUBTLE_POP,
+            GENTLE_BELL,
+            UPBEAT_SPARK,
+            SYSTEM_DEFAULT,
+            SILENT
+        )
+
+        val groupMessageProfiles = listOf(
+            GROUP_HARMONY,
+            DOUBLE_CHIME,
+            SUBTLE_POP,
+            UPBEAT_SPARK,
+            SYSTEM_DEFAULT,
+            SILENT
+        )
+    }
+}
+
 object NotificationHelper {
 
-    const val CHANNEL_ID_MESSAGES = "channel_messages_talepulse"
-    const val CHANNEL_ID_CALLS = "channel_calls_talepulse"
-    const val CHANNEL_ID_FRIENDS = "channel_friends_talepulse"
+    private const val PREFS_SOUNDS = "linko_notification_sound_prefs"
+    private const val KEY_DM_SOUND = "dm_sound_profile"
+    private const val KEY_GROUP_SOUND = "group_sound_profile"
+
+    const val CHANNEL_ID_MESSAGES = "channel_messages_linko"
+    const val CHANNEL_ID_DM_MESSAGES = "channel_dm_messages_linko"
+    const val CHANNEL_ID_GROUP_MESSAGES = "channel_group_messages_linko"
+    const val CHANNEL_ID_CALLS = "channel_calls_linko"
+    const val CHANNEL_ID_FRIENDS = "channel_friends_linko"
 
     const val KEY_TEXT_REPLY = "key_text_reply"
-    const val ACTION_REPLY_MESSAGE = "com.example.talepulse.ACTION_REPLY_MESSAGE"
-    const val ACTION_MARK_READ = "com.example.talepulse.ACTION_MARK_READ"
-    const val ACTION_ACCEPT_FRIEND_REQUEST = "com.example.talepulse.ACTION_ACCEPT_FRIEND_REQUEST"
-    const val ACTION_DECLINE_CALL = "com.example.talepulse.ACTION_DECLINE_CALL"
+    const val ACTION_REPLY_MESSAGE = "com.example.linko.ACTION_REPLY_MESSAGE"
+    const val ACTION_MARK_READ = "com.example.linko.ACTION_MARK_READ"
+    const val ACTION_ACCEPT_FRIEND_REQUEST = "com.example.linko.ACTION_ACCEPT_FRIEND_REQUEST"
+    const val ACTION_DECLINE_CALL = "com.example.linko.ACTION_DECLINE_CALL"
 
     const val EXTRA_SCREEN = "extra_screen"
     const val EXTRA_CHAT_ID = "extra_chat_id"
@@ -35,11 +130,107 @@ object NotificationHelper {
     const val SCREEN_INCOMING_CALL = "incoming_call"
     const val SCREEN_FRIENDS = "friends"
 
+    fun getDirectMessageSoundProfile(context: Context): NotificationSoundProfile {
+        val prefs = context.getSharedPreferences(PREFS_SOUNDS, Context.MODE_PRIVATE)
+        val saved = prefs.getString(KEY_DM_SOUND, NotificationSoundProfile.CHIME_PULSE.id)
+        return NotificationSoundProfile.fromId(saved ?: "", NotificationSoundProfile.CHIME_PULSE)
+    }
+
+    fun setDirectMessageSoundProfile(context: Context, profile: NotificationSoundProfile) {
+        val prefs = context.getSharedPreferences(PREFS_SOUNDS, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_DM_SOUND, profile.id).apply()
+        createNotificationChannels(context)
+    }
+
+    fun getGroupMessageSoundProfile(context: Context): NotificationSoundProfile {
+        val prefs = context.getSharedPreferences(PREFS_SOUNDS, Context.MODE_PRIVATE)
+        val saved = prefs.getString(KEY_GROUP_SOUND, NotificationSoundProfile.GROUP_HARMONY.id)
+        return NotificationSoundProfile.fromId(saved ?: "", NotificationSoundProfile.GROUP_HARMONY)
+    }
+
+    fun setGroupMessageSoundProfile(context: Context, profile: NotificationSoundProfile) {
+        val prefs = context.getSharedPreferences(PREFS_SOUNDS, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_GROUP_SOUND, profile.id).apply()
+        createNotificationChannels(context)
+    }
+
+    fun playSoundPreview(context: Context, profile: NotificationSoundProfile) {
+        if (profile == NotificationSoundProfile.SILENT) return
+        try {
+            if (profile.toneType != -1) {
+                val toneGenerator = android.media.ToneGenerator(
+                    android.media.AudioManager.STREAM_NOTIFICATION,
+                    100
+                )
+                toneGenerator.startTone(profile.toneType, 250)
+            } else {
+                val uri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION)
+                val ringtone = android.media.RingtoneManager.getRingtone(context, uri)
+                ringtone?.play()
+            }
+        } catch (_: Throwable) {
+            try {
+                val uri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION)
+                val ringtone = android.media.RingtoneManager.getRingtone(context, uri)
+                ringtone?.play()
+            } catch (_: Throwable) {}
+        }
+    }
+
     fun createNotificationChannels(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-            // Messages Channel
+            val dmSound = getDirectMessageSoundProfile(context)
+            val groupSound = getGroupMessageSoundProfile(context)
+
+            // Direct Messages Channel
+            val dmChannel = NotificationChannel(
+                "${CHANNEL_ID_DM_MESSAGES}_${dmSound.id}",
+                "Direct Messages (${dmSound.title})",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Alerts for 1-on-1 direct messages (Tone: ${dmSound.title})"
+                enableVibration(true)
+                setShowBadge(true)
+                if (dmSound == NotificationSoundProfile.SILENT) {
+                    setSound(null, null)
+                } else {
+                    val soundUri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION)
+                    setSound(
+                        soundUri,
+                        android.media.AudioAttributes.Builder()
+                            .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                    )
+                }
+            }
+
+            // Group Messages Channel
+            val groupChannel = NotificationChannel(
+                "${CHANNEL_ID_GROUP_MESSAGES}_${groupSound.id}",
+                "Group Messages (${groupSound.title})",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Alerts for group chat discussions (Tone: ${groupSound.title})"
+                enableVibration(true)
+                setShowBadge(true)
+                if (groupSound == NotificationSoundProfile.SILENT) {
+                    setSound(null, null)
+                } else {
+                    val soundUri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION)
+                    setSound(
+                        soundUri,
+                        android.media.AudioAttributes.Builder()
+                            .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                    )
+                }
+            }
+
+            // Legacy Messages Channel
             val msgChannel = NotificationChannel(
                 CHANNEL_ID_MESSAGES,
                 "Chat Messages",
@@ -70,20 +261,28 @@ object NotificationHelper {
                 enableVibration(true)
             }
 
-            notificationManager.createNotificationChannels(listOf(msgChannel, callChannel, friendChannel))
+            notificationManager.createNotificationChannels(listOf(dmChannel, groupChannel, msgChannel, callChannel, friendChannel))
         }
     }
 
     /**
      * Show actionable notification for a new message with Direct Reply input.
+     * Supports sound profiles for Direct vs Group messages.
      */
     fun showNewMessageNotification(
         context: Context,
         chatId: String,
         senderName: String,
-        messageText: String
+        messageText: String,
+        isGroup: Boolean = false
     ) {
         createNotificationChannels(context)
+
+        val soundProfile = if (isGroup) getGroupMessageSoundProfile(context) else getDirectMessageSoundProfile(context)
+        val channelId = if (isGroup) "${CHANNEL_ID_GROUP_MESSAGES}_${soundProfile.id}" else "${CHANNEL_ID_DM_MESSAGES}_${soundProfile.id}"
+
+        // Play audio feedback preview
+        playSoundPreview(context, soundProfile)
 
         // Intent to open DirectChatScreen when clicked
         val openIntent = Intent(context, MainActivity::class.java).apply {
@@ -142,7 +341,7 @@ object NotificationHelper {
             markReadPendingIntent
         ).build()
 
-        val notification = NotificationCompat.Builder(context, CHANNEL_ID_MESSAGES)
+        val notification = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
             .setContentTitle(senderName)
             .setContentText(messageText)
@@ -222,6 +421,55 @@ object NotificationHelper {
             .setContentIntent(answerPendingIntent)
             .addAction(answerAction)
             .addAction(declineAction)
+            .build()
+
+        try {
+            NotificationManagerCompat.from(context).notify(notificationId, notification)
+        } catch (_: SecurityException) {}
+    }
+
+    /**
+     * Show actionable notification for a missed call with Call Back action button.
+     */
+    fun showMissedCallNotification(
+        context: Context,
+        callerName: String,
+        callerEmail: String,
+        callType: String
+    ) {
+        createNotificationChannels(context)
+        val notificationId = 2002
+
+        // Call back intent -> opens app directly to call screen
+        val callBackIntent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(EXTRA_SCREEN, SCREEN_INCOMING_CALL)
+            putExtra(EXTRA_CALLER_NAME, callerName)
+            putExtra(EXTRA_CALLER_EMAIL, callerEmail)
+            putExtra(EXTRA_CALL_TYPE, callType)
+        }
+        val callBackPendingIntent = PendingIntent.getActivity(
+            context,
+            notificationId,
+            callBackIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val callBackAction = NotificationCompat.Action.Builder(
+            android.R.drawable.ic_menu_call,
+            "Call Back",
+            callBackPendingIntent
+        ).build()
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID_CALLS)
+            .setSmallIcon(android.R.drawable.stat_notify_missed_call)
+            .setContentTitle("Missed $callType Call")
+            .setContentText("You missed a $callType call from $callerName")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_MISSED_CALL)
+            .setAutoCancel(true)
+            .setContentIntent(callBackPendingIntent)
+            .addAction(callBackAction)
             .build()
 
         try {

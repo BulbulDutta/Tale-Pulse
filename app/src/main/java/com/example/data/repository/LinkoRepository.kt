@@ -26,7 +26,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.util.UUID
 
-class TalePulseRepository(
+class LinkoRepository(
     private val userDao: UserDao,
     private val contactDao: ContactDao,
     private val chatDao: ChatDao,
@@ -271,8 +271,7 @@ class TalePulseRepository(
         val trimmed = qrPayload.trim()
 
         // Strict Linko URI schema validation
-        val isValidLinkoSchema = trimmed.startsWith("linko://user", ignoreCase = true) ||
-                trimmed.startsWith("talepulse://user", ignoreCase = true)
+        val isValidLinkoSchema = trimmed.startsWith("linko://user", ignoreCase = true)
 
         if (!isValidLinkoSchema) {
             return Result.failure(IllegalArgumentException("Invalid Linko QR Code"))
@@ -283,7 +282,7 @@ class TalePulseRepository(
         var displayName = ""
         var avatarUri: String? = null
 
-        if (trimmed.startsWith("linko://user/") || trimmed.startsWith("talepulse://user/")) {
+        if (trimmed.startsWith("linko://user/")) {
             val pathPart = trimmed.substringAfter("://user/").substringBefore("?").substringBefore("&")
             if (pathPart.isNotBlank()) {
                 qrUserId = pathPart

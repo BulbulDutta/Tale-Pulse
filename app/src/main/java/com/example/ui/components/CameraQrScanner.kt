@@ -192,8 +192,7 @@ fun CameraQrScanner(
                                             val rawValue = barcode.rawValue
                                             if (!rawValue.isNullOrEmpty() && !isHasScanned) {
                                                 val trimmed = rawValue.trim()
-                                                val isValidLinko = trimmed.startsWith("linko://user", ignoreCase = true) ||
-                                                        trimmed.startsWith("talepulse://user", ignoreCase = true)
+                                                val isValidLinko = trimmed.startsWith("linko://user", ignoreCase = true)
                                                 if (isValidLinko) {
                                                     isHasScanned = true
                                                     onQrScanned(rawValue)

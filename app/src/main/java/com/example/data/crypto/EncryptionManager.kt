@@ -28,7 +28,7 @@ object EncryptionManager {
 
     private const val TAG = "EncryptionManager"
     private const val ANDROID_KEYSTORE = "AndroidKeyStore"
-    private const val MASTER_KEY_ALIAS = "Linko_TalePulse_Master_Identity_Key"
+    private const val MASTER_KEY_ALIAS = "Linko_Master_Identity_Key"
     
     private const val ALGORITHM_AES = "AES"
     private const val TRANSFORMATION_AES_GCM = "AES/GCM/NoPadding"
@@ -39,7 +39,7 @@ object EncryptionManager {
     
     private const val MSG_PREFIX = "ENC:v1:signal:"
     private const val CALL_PREFIX = "ENC:call:v1:"
-    private const val MASTER_SALT = "TalePulse-SignalProtocol-E2EE-MasterSalt-2026"
+    private const val MASTER_SALT = "Linko-SignalProtocol-E2EE-MasterSalt-2026"
 
     private val secureRandom = SecureRandom()
     
@@ -204,7 +204,7 @@ object EncryptionManager {
         try {
             val secretKey = getSecretKeyForChat(chatId)
             val digest = MessageDigest.getInstance("SHA-256")
-            val hash = digest.digest(("SafetyNumber:TalePulse:v1:$chatId:" + secretKey.encoded.joinToString()).toByteArray(Charsets.UTF_8))
+            val hash = digest.digest(("SafetyNumber:Linko:v1:$chatId:" + secretKey.encoded.joinToString()).toByteArray(Charsets.UTF_8))
 
             val digits = StringBuilder()
             for (i in 0 until 60) {

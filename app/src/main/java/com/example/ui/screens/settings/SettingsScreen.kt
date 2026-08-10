@@ -48,8 +48,10 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Feedback
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Language
@@ -57,6 +59,7 @@ import androidx.compose.material.icons.filled.ListAlt
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PhotoLibrary
@@ -70,6 +73,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -130,7 +135,8 @@ enum class SettingsDialogType {
     ACCESSIBILITY,
     LANGUAGE,
     HELP,
-    ACCOUNTS_CENTRE
+    ACCOUNTS_CENTRE,
+    TERMS_AND_CONDITIONS
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -498,6 +504,20 @@ fun SettingsScreen(
                     }
                 ),
                 SettingsMenuItemData(
+                    id = "terms",
+                    icon = Icons.Default.Description,
+                    title = "Terms & Conditions",
+                    subtitle = "Usage policies, storage rules & beta terms",
+                    onClick = { activeDialog = SettingsDialogType.TERMS_AND_CONDITIONS }
+                ),
+                SettingsMenuItemData(
+                    id = "feedback",
+                    icon = Icons.Default.Email,
+                    title = "Send Feedback",
+                    subtitle = "Send bug reports or suggestions to rocketccl801@gmail.com",
+                    onClick = { launchEmailFeedback(context) }
+                ),
+                SettingsMenuItemData(
                     id = "accounts_centre",
                     icon = Icons.Default.AccountCircle,
                     title = LocalizationManager.getString("item_accounts_centre", currentLanguage),
@@ -695,10 +715,15 @@ fun SettingsScreen(
             )
             SettingsDialogType.HELP -> HelpSettingsDialog(
                 primaryColor = currentPalette.primaryColor,
+                onOpenTerms = { activeDialog = SettingsDialogType.TERMS_AND_CONDITIONS },
                 onDismiss = { activeDialog = SettingsDialogType.NONE }
             )
             SettingsDialogType.ACCOUNTS_CENTRE -> AccountsCentreDialog(
                 user = user,
+                primaryColor = currentPalette.primaryColor,
+                onDismiss = { activeDialog = SettingsDialogType.NONE }
+            )
+            SettingsDialogType.TERMS_AND_CONDITIONS -> TermsAndConditionsDialog(
                 primaryColor = currentPalette.primaryColor,
                 onDismiss = { activeDialog = SettingsDialogType.NONE }
             )
@@ -941,7 +966,7 @@ private fun AccountSettingsDialog(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text("Email Address", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                Text(user?.email ?: "email@talepulse.com", fontSize = 12.sp, color = primaryColor)
+                Text(user?.email ?: "email@linko.com", fontSize = 12.sp, color = primaryColor)
 
                 Spacer(modifier = Modifier.height(16.dp))
                 HorizontalDivider()
@@ -1291,21 +1316,199 @@ private fun NotificationsSettingsDialog(
 ) {
     val context = LocalContext.current
 
+    var selectedDmProfile by remember {
+        mutableStateOf(com.example.notification.NotificationHelper.getDirectMessageSoundProfile(context))
+    }
+    var selectedGroupProfile by remember {
+        mutableStateOf(com.example.notification.NotificationHelper.getGroupMessageSoundProfile(context))
+    }
+
+    var isDmDropdownExpanded by remember { mutableStateOf(false) }
+    var isGroupDropdownExpanded by remember { mutableStateOf(false) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Notification Tones & Push Alerts", fontWeight = FontWeight.Bold) },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                // SOUND PROFILES SECTION
+                Text("Message Sound Profiles", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Assign distinct notification audio tones for 1-on-1 direct chats versus group discussions.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // DIRECT MESSAGES SOUND SELECTOR
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Direct Messages Sound", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                Text(
+                                    selectedDmProfile.title,
+                                    fontSize = 12.sp,
+                                    color = primaryColor,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                            IconButton(onClick = {
+                                com.example.notification.NotificationHelper.playSoundPreview(context, selectedDmProfile)
+                            }) {
+                                Icon(Icons.Default.VolumeUp, contentDescription = "Play Preview", tint = primaryColor)
+                            }
+                        }
+
+                        Box(modifier = Modifier.padding(top = 4.dp)) {
+                            OutlinedButton(
+                                onClick = { isDmDropdownExpanded = true },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("Change DM Sound Profile", fontSize = 12.sp)
+                            }
+
+                            DropdownMenu(
+                                expanded = isDmDropdownExpanded,
+                                onDismissRequest = { isDmDropdownExpanded = false }
+                            ) {
+                                com.example.notification.NotificationSoundProfile.directMessageProfiles.forEach { profile ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Column {
+                                                Text(profile.title, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                                Text(profile.description, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            }
+                                        },
+                                        onClick = {
+                                            selectedDmProfile = profile
+                                            com.example.notification.NotificationHelper.setDirectMessageSoundProfile(context, profile)
+                                            com.example.notification.NotificationHelper.playSoundPreview(context, profile)
+                                            isDmDropdownExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // GROUP MESSAGES SOUND SELECTOR
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Group Messages Sound", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                Text(
+                                    selectedGroupProfile.title,
+                                    fontSize = 12.sp,
+                                    color = primaryColor,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                            IconButton(onClick = {
+                                com.example.notification.NotificationHelper.playSoundPreview(context, selectedGroupProfile)
+                            }) {
+                                Icon(Icons.Default.VolumeUp, contentDescription = "Play Preview", tint = primaryColor)
+                            }
+                        }
+
+                        Box(modifier = Modifier.padding(top = 4.dp)) {
+                            OutlinedButton(
+                                onClick = { isGroupDropdownExpanded = true },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("Change Group Sound Profile", fontSize = 12.sp)
+                            }
+
+                            DropdownMenu(
+                                expanded = isGroupDropdownExpanded,
+                                onDismissRequest = { isGroupDropdownExpanded = false }
+                            ) {
+                                com.example.notification.NotificationSoundProfile.groupMessageProfiles.forEach { profile ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Column {
+                                                Text(profile.title, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                                Text(profile.description, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            }
+                                        },
+                                        onClick = {
+                                            selectedGroupProfile = profile
+                                            com.example.notification.NotificationHelper.setGroupMessageSoundProfile(context, profile)
+                                            com.example.notification.NotificationHelper.playSoundPreview(context, profile)
+                                            isGroupDropdownExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(16.dp))
+
                 Text("Live Immediate Triggers", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 Spacer(modifier = Modifier.height(8.dp))
 
-                Button(
-                    onClick = onTriggerMessageNotification,
-                    colors = ButtonDefaults.buttonColors(containerColor = primaryColor),
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Trigger Instant Message Alert")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            com.example.notification.NotificationHelper.showNewMessageNotification(
+                                context = context,
+                                chatId = "dm_101",
+                                senderName = "Elena Vance",
+                                messageText = "Hey! Direct message alert with tone: ${selectedDmProfile.title}",
+                                isGroup = false
+                            )
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = primaryColor),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("DM Alert", fontSize = 12.sp)
+                    }
+
+                    Button(
+                        onClick = {
+                            com.example.notification.NotificationHelper.showNewMessageNotification(
+                                context = context,
+                                chatId = "group_101",
+                                senderName = "Design Team (Marcus)",
+                                messageText = "Group chat alert with tone: ${selectedGroupProfile.title}",
+                                isGroup = true
+                            )
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = primaryColor),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Group Alert", fontSize = 12.sp)
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(6.dp))
@@ -1348,26 +1551,44 @@ private fun NotificationsSettingsDialog(
                 Text("Background / Offline Push Tests (5s Delay)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Tap a button below, then minimize Tale Pulse or lock your device. A push notification will arrive in 5 seconds to test background receipt.",
+                    text = "Tap a button below, then minimize Linko or lock your device. A push notification will arrive in 5 seconds to test background receipt.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(10.dp))
 
-                OutlinedButton(
-                    onClick = {
-                        com.example.notification.ScheduledNotificationReceiver.scheduleBackgroundPush(
-                            context = context,
-                            type = com.example.notification.ScheduledNotificationReceiver.TYPE_MESSAGE,
-                            delaySeconds = 5,
-                            messageText = "Message received while Tale Pulse was in background! 📩"
-                        )
-                        Toast.makeText(context, "Background Message Push scheduled in 5 seconds! Minimize the app now.", Toast.LENGTH_LONG).show()
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Text("⏳ Message Push (5s Delay)")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            com.example.notification.ScheduledNotificationReceiver.scheduleBackgroundPush(
+                                context = context,
+                                type = com.example.notification.ScheduledNotificationReceiver.TYPE_MESSAGE,
+                                delaySeconds = 5,
+                                messageText = "Direct Message received in background! 📩"
+                            )
+                            Toast.makeText(context, "DM Push scheduled in 5 seconds! Minimize the app now.", Toast.LENGTH_LONG).show()
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("⏳ DM Push", fontSize = 12.sp)
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            com.example.notification.ScheduledNotificationReceiver.scheduleBackgroundPush(
+                                context = context,
+                                type = com.example.notification.ScheduledNotificationReceiver.TYPE_GROUP_MESSAGE,
+                                delaySeconds = 5,
+                                messageText = "Group Message received in background! 👥"
+                            )
+                            Toast.makeText(context, "Group Push scheduled in 5 seconds! Minimize the app now.", Toast.LENGTH_LONG).show()
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("⏳ Group Push", fontSize = 12.sp)
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(6.dp))
@@ -1576,8 +1797,35 @@ private fun LanguageSettingsDialog(
     )
 }
 
+fun launchEmailFeedback(context: Context) {
+    val recipient = "rocketccl801@gmail.com"
+    val subject = "Linko App Feedback - Bug Report/Suggestion"
+    val mailtoUri = Uri.parse("mailto:$recipient?subject=${Uri.encode(subject)}")
+
+    val intent = Intent(Intent.ACTION_SENDTO, mailtoUri)
+    try {
+        context.startActivity(intent)
+    } catch (e: Exception) {
+        val fallbackIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "message/rfc822"
+            putExtra(Intent.EXTRA_EMAIL, arrayOf(recipient))
+            putExtra(Intent.EXTRA_SUBJECT, subject)
+        }
+        try {
+            context.startActivity(Intent.createChooser(fallbackIntent, "Send Feedback via Email"))
+        } catch (ex: Exception) {
+            Toast.makeText(context, "No email client found on device", Toast.LENGTH_SHORT).show()
+        }
+    }
+}
+
 @Composable
-private fun HelpSettingsDialog(primaryColor: Color, onDismiss: () -> Unit) {
+private fun HelpSettingsDialog(
+    primaryColor: Color,
+    onOpenTerms: () -> Unit = {},
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Help & Feedback", fontWeight = FontWeight.Bold) },
@@ -1585,18 +1833,122 @@ private fun HelpSettingsDialog(primaryColor: Color, onDismiss: () -> Unit) {
             Column {
                 Text("Linko Version 2.5.0 (Build 2026)", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 Spacer(modifier = Modifier.height(8.dp))
-                Text("End-to-End Encrypted Messaging & Calls Platform.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("End-to-End Encrypted Messaging & Media Sharing Platform.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                TextButton(onClick = {}, colors = ButtonDefaults.textButtonColors(contentColor = primaryColor)) {
-                    Text("Visit Help Centre")
+                Button(
+                    onClick = { launchEmailFeedback(context) },
+                    colors = ButtonDefaults.buttonColors(containerColor = primaryColor),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Send Feedback")
                 }
-                TextButton(onClick = {}, colors = ButtonDefaults.textButtonColors(contentColor = primaryColor)) {
-                    Text("Contact Support Team")
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedButton(
+                    onClick = {
+                        onDismiss()
+                        onOpenTerms()
+                    },
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Terms & Conditions")
                 }
-                TextButton(onClick = {}, colors = ButtonDefaults.textButtonColors(contentColor = primaryColor)) {
-                    Text("Privacy Policy & Terms")
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        }
+    )
+}
+
+@Composable
+private fun TermsAndConditionsDialog(
+    primaryColor: Color,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Description,
+                    contentDescription = "Terms Icon",
+                    tint = primaryColor
+                )
+                Text("Terms & Conditions", fontWeight = FontWeight.Bold, fontSize = 20.sp)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = "Please read our Terms and Conditions carefully before using Linko.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+
+                val termsText = """
+1. Introduction & Usage: Welcome to Linko! This is a modern messaging and media-sharing platform designed for seamless communication.
+
+2. Storage & Media: All photos, videos, and documents shared via Linko are saved directly to your device's local storage (Linko Media folder). We do not add any watermarks to your files.
+
+3. Beta Version & Bugs: Please note that the app is currently in the development/beta phase. You may encounter temporary bugs, data mismatches, or errors. These are known issues and will be fixed in our upcoming updates.
+
+4. Feedback & Support: Your feedback is highly valuable to us. If you face any issues or have suggestions, please use the Feedback button below to contact us directly.
+                """.trimIndent()
+
+                Text(
+                    text = termsText,
+                    fontSize = 13.sp,
+                    lineHeight = 20.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Button(
+                    onClick = {
+                        launchEmailFeedback(context)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = primaryColor),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("terms_send_feedback_btn")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Email,
+                        contentDescription = "Send Feedback",
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Send Feedback",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
                 }
             }
         },

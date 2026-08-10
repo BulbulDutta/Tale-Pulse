@@ -188,7 +188,7 @@ fun AuthScreen(
 
                     when (currentStep) {
                         // -------------------------------------------------------------
-                        // STEP 1: EMAIL INPUT & AUTOMATIC PIN ROUTING
+                        // STEP 1: GOOGLE SIGN-IN & EMAIL INPUT WITH AUTOMATIC PIN ROUTING
                         // -------------------------------------------------------------
                         AuthStep.OPTIONS, AuthStep.EMAIL_INPUT -> {
                             Text(
@@ -201,10 +201,89 @@ fun AuthScreen(
                             Spacer(modifier = Modifier.height(6.dp))
 
                             Text(
-                                text = "Enter your email address to access your permanent Linko account.",
+                                text = "Sign in with your Google Account or enter your email address.",
                                 color = Color.LightGray,
                                 fontSize = 12.sp
                             )
+
+                            Spacer(modifier = Modifier.height(20.dp))
+
+                            // GOOGLE SIGN-IN VIA CREDENTIAL MANAGER & FIREBASE AUTH
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        isVerifying = true
+                                        errorMessage = null
+                                        val result = com.example.util.GoogleAuthManager.signInWithGoogle(context)
+                                        isVerifying = false
+                                        result.onSuccess { googleUserData ->
+                                            email = googleUserData.email
+                                            if (googleUserData.displayName.isNotBlank()) {
+                                                displayName = googleUserData.displayName
+                                            }
+                                            if (UserPinManager.isPinSet(context, googleUserData.email)) {
+                                                loginPin = ""
+                                                currentStep = AuthStep.ENTER_PIN
+                                            } else {
+                                                newPin = ""
+                                                confirmPin = ""
+                                                isWarningAcknowledged = false
+                                                currentStep = AuthStep.SET_PIN
+                                            }
+                                        }.onFailure { e ->
+                                            if (e !is androidx.credentials.exceptions.GetCredentialCancellationException) {
+                                                errorMessage = e.message ?: "Google Sign-In failed"
+                                            }
+                                        }
+                                    }
+                                },
+                                enabled = !isVerifying,
+                                colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(50.dp)
+                                    .testTag("google_sign_in_button")
+                            ) {
+                                if (isVerifying) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(24.dp),
+                                        color = Slate900,
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Image(
+                                            painter = painterResource(id = R.drawable.ic_google_logo),
+                                            contentDescription = "Google Logo",
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Text(
+                                            text = "Sign in with Google",
+                                            color = Slate900,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 15.sp
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                HorizontalDivider(modifier = Modifier.weight(1f), color = Color.Gray.copy(alpha = 0.5f))
+                                Text(
+                                    text = "  OR  ",
+                                    color = Color.LightGray,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                HorizontalDivider(modifier = Modifier.weight(1f), color = Color.Gray.copy(alpha = 0.5f))
+                            }
 
                             Spacer(modifier = Modifier.height(16.dp))
 

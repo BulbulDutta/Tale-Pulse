@@ -66,15 +66,14 @@ import com.example.ui.screens.settings.SettingsScreen
 import com.example.ui.screens.status.StatusScreen
 import com.example.ui.theme.Emerald500
 import com.example.ui.theme.LinkoTheme
-import com.example.ui.theme.TalePulseTheme
-import com.example.ui.viewmodel.TalePulseViewModel
+import com.example.ui.viewmodel.LinkoViewModel
 
 import com.google.android.gms.ads.MobileAds
 import com.google.firebase.FirebaseApp
 
 class MainActivity : ComponentActivity() {
 
-    private val viewModel: TalePulseViewModel by viewModels()
+    private val viewModel: LinkoViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -107,7 +106,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun LinkoApp(viewModel: TalePulseViewModel) {
+fun LinkoApp(viewModel: LinkoViewModel) {
     val navController = rememberNavController()
 
     val authState by viewModel.authState.collectAsStateWithLifecycle()

@@ -129,7 +129,7 @@ object MediaDirectoryManager {
      * Formats raw bytes into clean human-readable footprint strings (e.g. "820 KB", "3.2 MB", "1.5 GB").
      */
     fun formatFileSize(sizeBytes: Long): String {
-        if (sizeBytes <= 0) return "0 B"
+        if (sizeBytes <= 0) return "0 KB"
         val units = arrayOf("B", "KB", "MB", "GB", "TB")
         val digitGroups = (Math.log10(sizeBytes.toDouble()) / Math.log10(1024.0)).toInt()
         val index = digitGroups.coerceIn(0, units.size - 1)

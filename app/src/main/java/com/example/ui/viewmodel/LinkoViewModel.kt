@@ -16,7 +16,7 @@ import com.example.data.model.ActiveCallState
 import com.example.data.model.AuthState
 import com.example.data.model.CallType
 import com.example.data.model.UserStatusGroup
-import com.example.data.repository.TalePulseRepository
+import com.example.data.repository.LinkoRepository
 import com.example.util.LinkoCallSignalingEngine
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -33,10 +33,10 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalCoroutinesApi::class)
-class TalePulseViewModel(application: Application) : AndroidViewModel(application) {
+class LinkoViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = AppDatabase.getInstance(application)
-    private val repository = TalePulseRepository(
+    private val repository = LinkoRepository(
         userDao = db.userDao(),
         contactDao = db.contactDao(),
         chatDao = db.chatDao(),

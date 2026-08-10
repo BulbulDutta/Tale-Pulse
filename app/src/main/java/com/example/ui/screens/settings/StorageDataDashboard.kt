@@ -403,25 +403,22 @@ fun StorageDataDashboardDialog(
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .height(180.dp)
-                                        .background(
-                                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-                                            RoundedCornerShape(16.dp)
-                                        ),
+                                        .padding(vertical = 40.dp),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                        Icon(
-                                            imageVector = Icons.Default.Folder,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                                            modifier = Modifier.size(48.dp)
-                                        )
-                                        Spacer(modifier = Modifier.height(8.dp))
                                         Text(
-                                            text = "No files in this Linko media directory.",
-                                            fontSize = 13.sp,
+                                            text = "0 Files. No media shared yet.",
+                                            fontWeight = FontWeight.SemiBold,
+                                            fontSize = 15.sp,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Text(
+                                            text = "0 KB",
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = primaryColor
                                         )
                                     }
                                 }

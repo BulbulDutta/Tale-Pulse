@@ -135,12 +135,3 @@ fun LinkoTheme(
     )
 }
 
-@Composable
-fun TalePulseTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    palette: AppThemePalette = AppThemePalette.EMERALD,
-    content: @Composable () -> Unit
-) {
-    LinkoTheme(darkTheme = darkTheme, palette = palette, content = content)
-}
-

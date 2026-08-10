@@ -17,18 +17,33 @@ class ScheduledNotificationReceiver : BroadcastReceiver() {
                 val chatId = intent.getStringExtra(NotificationHelper.EXTRA_CHAT_ID) ?: "chat_1"
                 val senderName = intent.getStringExtra(EXTRA_SENDER_NAME) ?: "Elena Vance"
                 val text = intent.getStringExtra(EXTRA_MESSAGE_TEXT)
-                    ?: "Hey! Here is a message update from Tale Pulse 🌟"
+                    ?: "Hey! Here is a direct message update from Linko 🌟"
 
                 NotificationHelper.showNewMessageNotification(
                     context = context,
                     chatId = chatId,
                     senderName = senderName,
-                    messageText = text
+                    messageText = text,
+                    isGroup = false
+                )
+            }
+            TYPE_GROUP_MESSAGE -> {
+                val chatId = intent.getStringExtra(NotificationHelper.EXTRA_CHAT_ID) ?: "group_1"
+                val senderName = intent.getStringExtra(EXTRA_SENDER_NAME) ?: "Design Team (Alex)"
+                val text = intent.getStringExtra(EXTRA_MESSAGE_TEXT)
+                    ?: "Hey everyone! New group update posted in Linko 🚀"
+
+                NotificationHelper.showNewMessageNotification(
+                    context = context,
+                    chatId = chatId,
+                    senderName = senderName,
+                    messageText = text,
+                    isGroup = true
                 )
             }
             TYPE_CALL -> {
                 val callerName = intent.getStringExtra(NotificationHelper.EXTRA_CALLER_NAME) ?: "Marcus Miller"
-                val callerEmail = intent.getStringExtra(NotificationHelper.EXTRA_CALLER_EMAIL) ?: "marcus@talepulse.com"
+                val callerEmail = intent.getStringExtra(NotificationHelper.EXTRA_CALLER_EMAIL) ?: "marcus@linko.com"
                 val callType = intent.getStringExtra(NotificationHelper.EXTRA_CALL_TYPE) ?: "Voice"
 
                 NotificationHelper.showIncomingCallNotification(
@@ -38,9 +53,21 @@ class ScheduledNotificationReceiver : BroadcastReceiver() {
                     callType = callType
                 )
             }
+            TYPE_MISSED_CALL -> {
+                val callerName = intent.getStringExtra(NotificationHelper.EXTRA_CALLER_NAME) ?: "Marcus Miller"
+                val callerEmail = intent.getStringExtra(NotificationHelper.EXTRA_CALLER_EMAIL) ?: "marcus@linko.com"
+                val callType = intent.getStringExtra(NotificationHelper.EXTRA_CALL_TYPE) ?: "Voice"
+
+                NotificationHelper.showMissedCallNotification(
+                    context = context,
+                    callerName = callerName,
+                    callerEmail = callerEmail,
+                    callType = callType
+                )
+            }
             TYPE_FRIEND_REQUEST -> {
                 val requesterName = intent.getStringExtra(NotificationHelper.EXTRA_REQUESTER_NAME) ?: "Sophia Chen"
-                val requesterEmail = intent.getStringExtra(NotificationHelper.EXTRA_REQUESTER_EMAIL) ?: "sophia@talepulse.com"
+                val requesterEmail = intent.getStringExtra(NotificationHelper.EXTRA_REQUESTER_EMAIL) ?: "sophia@linko.com"
 
                 NotificationHelper.showFriendRequestNotification(
                     context = context,
@@ -57,7 +84,9 @@ class ScheduledNotificationReceiver : BroadcastReceiver() {
         const val EXTRA_MESSAGE_TEXT = "extra_message_text"
 
         const val TYPE_MESSAGE = "TYPE_MESSAGE"
+        const val TYPE_GROUP_MESSAGE = "TYPE_GROUP_MESSAGE"
         const val TYPE_CALL = "TYPE_CALL"
+        const val TYPE_MISSED_CALL = "TYPE_MISSED_CALL"
         const val TYPE_FRIEND_REQUEST = "TYPE_FRIEND_REQUEST"
 
         fun scheduleBackgroundPush(
@@ -74,14 +103,17 @@ class ScheduledNotificationReceiver : BroadcastReceiver() {
                 putExtra(NotificationHelper.EXTRA_CHAT_ID, chatId)
                 if (type == TYPE_MESSAGE) {
                     putExtra(EXTRA_SENDER_NAME, senderOrCallerName ?: "Elena Vance")
-                    putExtra(EXTRA_MESSAGE_TEXT, messageText ?: "Background message notification from Tale Pulse! 💬")
+                    putExtra(EXTRA_MESSAGE_TEXT, messageText ?: "Direct message notification from Linko! 💬")
+                } else if (type == TYPE_GROUP_MESSAGE) {
+                    putExtra(EXTRA_SENDER_NAME, senderOrCallerName ?: "Design Team (Alex)")
+                    putExtra(EXTRA_MESSAGE_TEXT, messageText ?: "Group discussion message from Linko! 👥")
                 } else if (type == TYPE_CALL) {
                     putExtra(NotificationHelper.EXTRA_CALLER_NAME, senderOrCallerName ?: "Marcus Miller")
-                    putExtra(NotificationHelper.EXTRA_CALLER_EMAIL, "marcus@talepulse.com")
+                    putExtra(NotificationHelper.EXTRA_CALLER_EMAIL, "marcus@linko.com")
                     putExtra(NotificationHelper.EXTRA_CALL_TYPE, if (isVideoCall) "Video" else "Voice")
                 } else if (type == TYPE_FRIEND_REQUEST) {
                     putExtra(NotificationHelper.EXTRA_REQUESTER_NAME, senderOrCallerName ?: "Sophia Chen")
-                    putExtra(NotificationHelper.EXTRA_REQUESTER_EMAIL, "sophia@talepulse.com")
+                    putExtra(NotificationHelper.EXTRA_REQUESTER_EMAIL, "sophia@linko.com")
                 }
             }
 

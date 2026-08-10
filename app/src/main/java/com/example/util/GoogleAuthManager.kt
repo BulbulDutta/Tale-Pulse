@@ -65,6 +65,23 @@ object GoogleAuthManager {
                 val idToken = googleIdTokenCredential.idToken
                 val profilePicture = googleIdTokenCredential.profilePictureUri?.toString()
 
+                // Authenticate with Firebase Auth using GoogleAuthProvider
+                if (!idToken.isNullOrBlank()) {
+                    try {
+                        val auth = com.google.firebase.auth.FirebaseAuth.getInstance()
+                        val credential = com.google.firebase.auth.GoogleAuthProvider.getCredential(idToken, null)
+                        auth.signInWithCredential(credential)
+                            .addOnSuccessListener { authResult ->
+                                Log.d(TAG, "Firebase Auth Google Sign-In successful for UID: ${authResult.user?.uid}")
+                            }
+                            .addOnFailureListener { e ->
+                                Log.w(TAG, "Firebase Auth Google Sign-In failed: ${e.message}")
+                            }
+                    } catch (e: Throwable) {
+                        Log.w(TAG, "Firebase Auth integration error: ${e.message}")
+                    }
+                }
+
                 val baseUsername = email.substringBefore("@").replace(".", "_")
                 val username = "${baseUsername}_google"
 
