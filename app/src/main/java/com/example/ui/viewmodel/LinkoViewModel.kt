@@ -270,18 +270,39 @@ class LinkoViewModel(application: Application) : AndroidViewModel(application) {
         return _onlineUserEmails.value.contains(normalized)
     }
 
+    fun getContactForChat(chat: ChatEntity?): ContactEntity? {
+        if (chat == null || chat.isGroup) return null
+        val me = currentUser.value
+        val participantIds = try {
+            if (chat.participantIdsJson.isBlank()) emptyList()
+            else {
+                val array = org.json.JSONArray(chat.participantIdsJson)
+                (0 until array.length()).map { array.getString(it) }
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val myId = me?.id ?: ""
+        val otherUserId = participantIds.find { it != myId }
+
+        if (otherUserId != null) {
+            val match = contacts.value.find { it.contactUserId == otherUserId }
+            if (match != null) return match
+        }
+        return contacts.value.find {
+            "chat_${it.contactUserId}" == chat.id ||
+            it.contactDisplayName.equals(chat.name, ignoreCase = true) ||
+            it.contactEmail.equals(chat.name, ignoreCase = true)
+        }
+    }
+
     fun isChatOnline(chat: ChatEntity?): Boolean {
         if (chat == null) return false
         if (chat.isGroup) return false
         if (chat.id == "chat_gemini_ai" || chat.name.contains("Gemini")) return true
 
-        val matchedContact = contacts.value.find { "chat_${it.contactUserId}" == chat.id || it.contactDisplayName.equals(chat.name, ignoreCase = true) }
-        return if (matchedContact != null) isUserOnline(matchedContact.contactEmail) else isUserOnline(chat.name)
-    }
-
-    fun getContactForChat(chat: ChatEntity?): ContactEntity? {
-        if (chat == null) return null
-        return contacts.value.find { "chat_${it.contactUserId}" == chat.id || it.contactDisplayName.equals(chat.name, ignoreCase = true) }
+        val contact = getContactForChat(chat)
+        return if (contact != null) isUserOnline(contact.contactEmail) else isUserOnline(chat.name)
     }
 
     fun loginOrRegister(email: String, displayName: String, username: String) {
@@ -303,11 +324,16 @@ class LinkoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectChat(chatId: String) {
+        val prevChatId = _selectedChatId.value
+        if (prevChatId != null && prevChatId != chatId) {
+            repository.stopChatReceiptSync(prevChatId)
+        }
         _selectedChatId.value = chatId
         val me = currentUser.value
         viewModelScope.launch {
             if (me != null) {
-                repository.markChatMessagesAsRead(chatId, me.id)
+                repository.markChatMessagesAsRead(chatId, me.id, me.email)
+                repository.startChatReceiptSync(chatId, me.id)
             } else {
                 repository.clearChatUnread(chatId)
             }
@@ -317,11 +343,15 @@ class LinkoViewModel(application: Application) : AndroidViewModel(application) {
     fun markChatMessagesAsRead(chatId: String) {
         val me = currentUser.value ?: return
         viewModelScope.launch {
-            repository.markChatMessagesAsRead(chatId, me.id)
+            repository.markChatMessagesAsRead(chatId, me.id, me.email)
         }
     }
 
     fun clearSelectedChat() {
+        val prevChatId = _selectedChatId.value
+        if (prevChatId != null) {
+            repository.stopChatReceiptSync(prevChatId)
+        }
         _selectedChatId.value = null
     }
 
@@ -553,7 +583,32 @@ class LinkoViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // 2. Add Call Log entry
+        // 2. Set active call state so user can interact and click Fechar Google Meet
+        _activeCallState.value = ActiveCallState(
+            contactName = contactName,
+            contactEmail = contactEmail,
+            contactAvatarUri = contactAvatar,
+            callType = callType,
+            isMuted = false,
+            isSpeakerOn = true,
+            isVideoEnabled = (callType == CallType.VIDEO),
+            isFrontCamera = true,
+            callDurationSeconds = 0,
+            statusText = "Google Meet: $meetCode"
+        )
+
+        // 3. Start call duration timer
+        callTimerJob?.cancel()
+        callTimerJob = viewModelScope.launch {
+            while (true) {
+                delay(1000)
+                _activeCallState.value = _activeCallState.value?.let {
+                    it.copy(callDurationSeconds = it.callDurationSeconds + 1)
+                } ?: break
+            }
+        }
+
+        // 4. Add Call Log entry
         viewModelScope.launch {
             repository.addCallLog(
                 contactName = contactName,
@@ -566,16 +621,32 @@ class LinkoViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
 
-        // 3. Launch Google Meet Intent
+        // 5. Launch Google Meet Intent
         try {
             val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(meetUrl)).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(intent)
-            _actionStatusMessage.value = "Launching Google Meet for $contactName..."
+            _actionStatusMessage.value = "Google Meet aberto: $meetCode"
         } catch (e: Exception) {
-            _actionStatusMessage.value = "Google Meet Link Created: $meetUrl"
+            _actionStatusMessage.value = "Google Meet Link: $meetUrl"
         }
+    }
+
+    fun fecharGoogleMeet(chatId: String? = null) {
+        endCall()
+        val targetChatId = chatId ?: _selectedChatId.value
+        val user = currentUser.value
+        if (targetChatId != null && user != null) {
+            viewModelScope.launch {
+                repository.sendMessage(
+                    chatId = targetChatId,
+                    sender = user,
+                    text = "🔴 Google Meet finalizado / fechado por ${user.displayName}."
+                )
+            }
+        }
+        _actionStatusMessage.value = "Google Meet fechado com sucesso."
     }
 
     private fun generateMeetCode(): String {

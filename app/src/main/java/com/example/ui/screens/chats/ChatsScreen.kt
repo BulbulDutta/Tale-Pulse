@@ -52,7 +52,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.entity.ChatEntity
 import com.example.data.local.entity.ContactEntity
-import com.example.ui.components.AdBannerView
 import com.example.ui.components.EmailTransportBadge
 import com.example.ui.components.UserAvatar
 import com.example.ui.theme.Emerald500
@@ -67,6 +66,7 @@ import java.util.Locale
 fun ChatsScreen(
     chats: List<ChatEntity>,
     contacts: List<ContactEntity>,
+    currentUser: com.example.data.local.entity.UserEntity? = null,
     currentLanguage: com.example.util.AppLanguage = com.example.util.AppLanguage.ENGLISH,
     onSelectChat: (String) -> Unit,
     onOpenGeminiClick: () -> Unit,
@@ -80,9 +80,17 @@ fun ChatsScreen(
     var searchQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf("All") } // "All", "Unread", "Groups"
 
-    val filteredChats = remember(chats, searchQuery, selectedFilter) {
+    val chatDisplayMap = remember(chats, contacts, currentUser) {
+        chats.associate { chat ->
+            val display = resolveChatDisplay(chat, contacts, currentUser)
+            chat.id to display
+        }
+    }
+
+    val filteredChats = remember(chats, searchQuery, selectedFilter, chatDisplayMap) {
         chats.filter { chat ->
-            val matchesQuery = chat.name.contains(searchQuery, ignoreCase = true) ||
+            val (dispName, _) = chatDisplayMap[chat.id] ?: Pair(chat.name, chat.groupIconUri)
+            val matchesQuery = dispName.contains(searchQuery, ignoreCase = true) ||
                     chat.lastMessageText.contains(searchQuery, ignoreCase = true)
             val matchesFilter = when (selectedFilter) {
                 "Unread" -> chat.unreadCount > 0
@@ -266,9 +274,6 @@ fun ChatsScreen(
                 }
             }
 
-            // Google AdMob Banner Ad
-            AdBannerView()
-
             // Chat List
             if (filteredChats.isEmpty()) {
                 Box(
@@ -319,8 +324,11 @@ fun ChatsScreen(
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(filteredChats, key = { it.id }) { chat ->
                         val isOnline = isChatOnline(chat)
+                        val (dispName, dispAvatar) = chatDisplayMap[chat.id] ?: Pair(chat.name, chat.groupIconUri)
                         ChatItemRow(
                             chat = chat,
+                            displayName = dispName,
+                            displayAvatarUri = dispAvatar,
                             isOnline = isOnline,
                             onClick = { onSelectChat(chat.id) }
                         )
@@ -358,9 +366,43 @@ fun ChatsScreen(
     }
 }
 
+private fun resolveChatDisplay(
+    chat: ChatEntity,
+    contacts: List<ContactEntity>,
+    currentUser: com.example.data.local.entity.UserEntity?
+): Pair<String, String?> {
+    if (chat.isGroup) {
+        return Pair(chat.name, chat.groupIconUri)
+    }
+    if (chat.id == "chat_gemini_ai" || chat.name.contains("Gemini")) {
+        return Pair("Gemini AI Assistant", null)
+    }
+    val participantIds = try {
+        if (chat.participantIdsJson.isBlank()) emptyList()
+        else {
+            val jsonArray = org.json.JSONArray(chat.participantIdsJson)
+            (0 until jsonArray.length()).map { jsonArray.getString(it) }
+        }
+    } catch (_: Exception) {
+        emptyList()
+    }
+    val myId = currentUser?.id ?: ""
+    val otherUserId = participantIds.find { it != myId }
+    val contact = if (otherUserId != null) {
+        contacts.find { it.contactUserId == otherUserId }
+    } else {
+        contacts.find { "chat_${it.contactUserId}" == chat.id || it.contactDisplayName.equals(chat.name, ignoreCase = true) }
+    }
+    val name = contact?.contactDisplayName ?: if (chat.name.isNotBlank() && !chat.name.equals(currentUser?.displayName, ignoreCase = true)) chat.name else "Contact"
+    val avatar = contact?.contactAvatarUri ?: chat.groupIconUri
+    return Pair(name, avatar)
+}
+
 @Composable
 private fun ChatItemRow(
     chat: ChatEntity,
+    displayName: String = chat.name,
+    displayAvatarUri: String? = chat.groupIconUri,
     isOnline: Boolean = false,
     onClick: () -> Unit
 ) {
@@ -378,8 +420,8 @@ private fun ChatItemRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             UserAvatar(
-                name = chat.name,
-                avatarUri = chat.groupIconUri,
+                name = displayName,
+                avatarUri = displayAvatarUri,
                 isGroup = chat.isGroup,
                 size = 52.dp,
                 showOnlineStatus = true,
@@ -394,7 +436,7 @@ private fun ChatItemRow(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = chat.name,
+                        text = displayName,
                         fontWeight = FontWeight.Bold,
                         fontSize = 16.sp,
                         color = MaterialTheme.colorScheme.onSurface,

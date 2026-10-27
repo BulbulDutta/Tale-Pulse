@@ -55,6 +55,8 @@ data class MessageEntity(
     val formattedRichText: String? = null,
     val timestamp: Long = System.currentTimeMillis(),
     val status: String = "SENT", // "SENT", "DELIVERED", "READ"
+    val deliveredAt: Long? = null,
+    val readAt: Long? = null,
     val emailTransportStatus: String = "DISPATCHED_SMTP", // "PENDING", "DISPATCHED_SMTP", "DELIVERED_INBOX"
     val emailSubject: String? = null,
     val emailMessageId: String? = null,

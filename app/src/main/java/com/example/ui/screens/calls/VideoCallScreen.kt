@@ -254,15 +254,24 @@ fun VideoCallScreen(
                     )
                 }
 
-                IconButton(
-                    onClick = onEndCall,
-                    colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Red),
-                    modifier = Modifier.size(54.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.CallEnd,
-                        contentDescription = "End Call",
-                        tint = Color.White
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    IconButton(
+                        onClick = onEndCall,
+                        colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Red),
+                        modifier = Modifier.size(54.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CallEnd,
+                            contentDescription = "Fechar Google Meet",
+                            tint = Color.White
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = if (callState.statusText.contains("Meet", ignoreCase = true)) "Fechar Meet" else "Desligar",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
                     )
                 }
             }

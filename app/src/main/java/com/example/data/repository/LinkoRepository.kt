@@ -15,6 +15,7 @@ import com.example.data.local.entity.StatusEntity
 import com.example.data.local.entity.UserEntity
 import com.example.data.model.CallType
 import com.example.data.remote.FirestoreContactService
+import com.example.data.remote.FirestoreMessageService
 import com.example.data.remote.GeminiClient
 import org.json.JSONArray
 import org.json.JSONObject
@@ -404,14 +405,37 @@ class LinkoRepository(
         }
     }
 
+    companion object {
+        fun generateDirectChatId(user1Id: String, user2Id: String): String {
+            if (user1Id == "user_gemini" || user2Id == "user_gemini" || user1Id == "gemini" || user2Id == "gemini") {
+                return "chat_gemini_ai"
+            }
+            val u1 = user1Id.trim()
+            val u2 = user2Id.trim()
+            val sorted = if (u1 < u2) "${u1}_${u2}" else "${u2}_${u1}"
+            return "chat_$sorted"
+        }
+    }
+
     suspend fun createOrGetDirectChat(me: UserEntity, contact: ContactEntity): ChatEntity {
-        val chatId = "chat_${contact.contactUserId}"
+        val chatId = generateDirectChatId(me.id, contact.contactUserId)
         val existing = chatDao.getChatById(chatId)
         if (existing != null) {
-            if (existing.name != contact.contactDisplayName || existing.groupIconUri != contact.contactAvatarUri) {
+            val participants = parseJsonArray(existing.participantIdsJson)
+            var updated = false
+            if (!participants.contains(me.id)) {
+                participants.add(me.id)
+                updated = true
+            }
+            if (!participants.contains(contact.contactUserId)) {
+                participants.add(contact.contactUserId)
+                updated = true
+            }
+            if (updated) {
                 val updatedChat = existing.copy(
-                    name = contact.contactDisplayName,
-                    groupIconUri = contact.contactAvatarUri
+                    participantIdsJson = toJsonArray(participants),
+                    name = if (existing.name.isBlank()) contact.contactDisplayName else existing.name,
+                    groupIconUri = existing.groupIconUri ?: contact.contactAvatarUri
                 )
                 chatDao.insertOrUpdateChat(updatedChat)
                 return updatedChat
@@ -420,14 +444,17 @@ class LinkoRepository(
         }
 
         val existingList = chatDao.getAllChatsList()
-        val matchingByName = existingList.find { !it.isGroup && it.name.equals(contact.contactDisplayName, ignoreCase = true) }
-        if (matchingByName != null) {
-            if (matchingByName.groupIconUri != contact.contactAvatarUri) {
-                val updatedChat = matchingByName.copy(groupIconUri = contact.contactAvatarUri)
-                chatDao.insertOrUpdateChat(updatedChat)
-                return updatedChat
+        val legacyChat = existingList.find { chat ->
+            if (chat.isGroup) false
+            else {
+                val parts = parseJsonArray(chat.participantIdsJson)
+                (parts.contains(me.id) && parts.contains(contact.contactUserId)) ||
+                chat.id == "chat_${contact.contactUserId}" ||
+                chat.id == "chat_${me.id}"
             }
-            return matchingByName
+        }
+        if (legacyChat != null) {
+            return legacyChat
         }
 
         val newChat = ChatEntity(
@@ -435,7 +462,7 @@ class LinkoRepository(
             isGroup = false,
             name = contact.contactDisplayName,
             groupIconUri = contact.contactAvatarUri,
-            participantIdsJson = "[\"${me.id}\", \"${contact.contactUserId}\"]",
+            participantIdsJson = toJsonArray(listOf(me.id, contact.contactUserId).distinct()),
             lastMessageText = "Chat started",
             lastMessageTimestamp = System.currentTimeMillis()
         )
@@ -507,6 +534,8 @@ class LinkoRepository(
             formattedRichText = formattedRichText,
             timestamp = System.currentTimeMillis(),
             status = "SENT",
+            deliveredAt = null,
+            readAt = null,
             emailTransportStatus = "DISPATCHED_SMTP",
             emailSubject = subject,
             emailMessageId = emailMsgId,
@@ -523,18 +552,35 @@ class LinkoRepository(
         }
         chatDao.updateLastMessage(chatId, previewText, System.currentTimeMillis())
 
-        // Handle delivery & replies in background
+        val participants = parseJsonArray(chat?.participantIdsJson ?: "")
+        FirestoreMessageService.uploadMessage(message, participants)
+
+        // Handle delivery & read receipts with Firestore server timestamps
         ioScope.launch {
-            delay(600)
-            messageDao.updateMessageStatus(msgId, "DELIVERED")
-            messageDao.updateEmailTransportStatus(msgId, "DELIVERED_INBOX")
+            delay(500)
+            // Mark DELIVERED in Firestore using FieldValue.serverTimestamp()
+            FirestoreMessageService.markMessageDelivered(msgId) { deliveredTimestamp ->
+                ioScope.launch {
+                    messageDao.markMessageDelivered(msgId, deliveredTimestamp)
+                    messageDao.updateEmailTransportStatus(msgId, "DELIVERED_INBOX")
+                }
+            }
 
             if (chatId == "chat_gemini_ai" || chat?.name?.contains("Gemini") == true) {
+                delay(1200)
+                // Gemini reads the prompt: update Firestore read receipt with serverTimestamp
+                FirestoreMessageService.markMessageRead(msgId) { readTimestamp ->
+                    ioScope.launch {
+                        messageDao.markSingleMessageAsRead(msgId, readTimestamp)
+                    }
+                }
+
                 val promptText = if (text.isNotBlank()) text else "Analyze the attached item."
                 val aiResponse = GeminiClient.generateResponse(promptText)
 
                 val replyMsgId = "m_gemini_${UUID.randomUUID().toString().take(8)}"
                 val encryptedAiResponse = EncryptionManager.encrypt(aiResponse, chatId)
+                val replyNow = System.currentTimeMillis()
                 val replyMsg = MessageEntity(
                     id = replyMsgId,
                     chatId = chatId,
@@ -542,8 +588,10 @@ class LinkoRepository(
                     senderName = "Gemini AI Assistant",
                     senderEmail = "gemini.ai@linko.com",
                     text = encryptedAiResponse,
-                    timestamp = System.currentTimeMillis(),
+                    timestamp = replyNow,
                     status = "DELIVERED",
+                    deliveredAt = replyNow,
+                    readAt = null,
                     emailTransportStatus = "DELIVERED_INBOX",
                     emailSubject = "Gemini AI Response",
                     emailMessageId = "<gemini-${UUID.randomUUID().toString().take(6)}@linko.net>",
@@ -551,14 +599,39 @@ class LinkoRepository(
                     encryptionAlgorithm = "AES-256-GCM"
                 )
                 messageDao.insertMessage(replyMsg)
+                FirestoreMessageService.uploadMessage(replyMsg, participants)
                 chatDao.updateLastMessage(chatId, aiResponse.take(60), System.currentTimeMillis())
+            } else {
+                // For direct peer contacts, mark as read after delay with Firestore server timestamp
+                delay(2200)
+                FirestoreMessageService.markMessageRead(msgId) { readTimestamp ->
+                    ioScope.launch {
+                        messageDao.markSingleMessageAsRead(msgId, readTimestamp)
+                    }
+                }
             }
         }
     }
 
-    suspend fun markChatMessagesAsRead(chatId: String, currentUserId: String) {
-        messageDao.markUnreadMessagesAsRead(chatId, currentUserId)
+    suspend fun markChatMessagesAsRead(chatId: String, currentUserId: String, currentUserEmail: String = "") {
+        val now = System.currentTimeMillis()
+        messageDao.markUnreadMessagesAsRead(chatId, currentUserId, now)
         chatDao.clearUnreadCount(chatId)
+        FirestoreMessageService.markChatMessagesRead(chatId, currentUserId, currentUserEmail) { readTimestamp ->
+            ioScope.launch {
+                messageDao.markUnreadMessagesAsRead(chatId, currentUserId, readTimestamp)
+            }
+        }
+    }
+
+    fun startChatReceiptSync(chatId: String, currentUserId: String) {
+        FirestoreMessageService.startListeningToChatReceipts(chatId, currentUserId, ioScope) { msgId, status, deliveredAt, readAt ->
+            messageDao.updateMessageReceipt(msgId, status, deliveredAt, readAt)
+        }
+    }
+
+    fun stopChatReceiptSync(chatId: String) {
+        FirestoreMessageService.stopListening(chatId)
     }
 
     suspend fun clearChatUnread(chatId: String) {

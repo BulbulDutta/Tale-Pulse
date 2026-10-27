@@ -19,7 +19,7 @@ import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
  */
 object GoogleAuthManager {
 
-    const val GOOGLE_WEB_CLIENT_ID = "419727588321-vpr8ij7unfkrlpi10fb8ceb5q1g0tfj.apps.googleusercontent.com"
+    const val GOOGLE_WEB_CLIENT_ID = "419727588321-vpr8ij7unfkrl7pil0fb8ceb5q1g0tfj.apps.googleusercontent.com"
     private const val TAG = "GoogleAuthManager"
     private const val PREF_AUTH = "linko_auth_prefs"
 
@@ -30,6 +30,26 @@ object GoogleAuthManager {
         val idToken: String?,
         val profilePictureUri: String?
     )
+
+    fun createGoogleUserSession(
+        context: Context,
+        email: String,
+        displayName: String,
+        idToken: String? = null,
+        profilePictureUri: String? = null
+    ): GoogleUserData {
+        val baseUsername = email.substringBefore("@").replace(".", "_")
+        val username = "${baseUsername}_google"
+        val userData = GoogleUserData(
+            email = email.trim().lowercase(),
+            displayName = displayName.ifBlank { email.substringBefore("@").replace(".", " ").capitalizeWords() },
+            username = username,
+            idToken = idToken,
+            profilePictureUri = profilePictureUri
+        )
+        saveGoogleSession(context, userData)
+        return userData
+    }
 
     /**
      * Triggers the native Android Credential Manager bottom sheet account picker.

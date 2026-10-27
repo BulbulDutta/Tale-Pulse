@@ -162,16 +162,25 @@ fun AudioCallScreen(
                     )
                 }
 
-                IconButton(
-                    onClick = onEndCall,
-                    colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Red),
-                    modifier = Modifier.size(70.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.CallEnd,
-                        contentDescription = "End Call",
-                        tint = Color.White,
-                        modifier = Modifier.size(34.dp)
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    IconButton(
+                        onClick = onEndCall,
+                        colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Red),
+                        modifier = Modifier.size(70.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CallEnd,
+                            contentDescription = "Fechar Google Meet",
+                            tint = Color.White,
+                            modifier = Modifier.size(34.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = if (callState.statusText.contains("Meet", ignoreCase = true)) "Fechar Meet" else "Desligar",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
                     )
                 }
 

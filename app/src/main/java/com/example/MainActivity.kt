@@ -68,7 +68,6 @@ import com.example.ui.theme.Emerald500
 import com.example.ui.theme.LinkoTheme
 import com.example.ui.viewmodel.LinkoViewModel
 
-import com.google.android.gms.ads.MobileAds
 import com.google.firebase.FirebaseApp
 
 class MainActivity : ComponentActivity() {
@@ -78,11 +77,20 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         try {
-            FirebaseApp.initializeApp(this)
-        } catch (_: Exception) {}
-        try {
-            MobileAds.initialize(this) {}
-        } catch (_: Exception) {}
+            if (FirebaseApp.getApps(this).isEmpty()) {
+                val options = com.google.firebase.FirebaseOptions.Builder()
+                    .setApplicationId(getString(R.string.google_app_id))
+                    .setGcmSenderId(getString(R.string.gcm_defaultSenderId))
+                    .setApiKey(getString(R.string.google_api_key))
+                    .setProjectId("linko-app")
+                    .build()
+                FirebaseApp.initializeApp(this, options)
+            }
+        } catch (_: Exception) {
+            try {
+                FirebaseApp.initializeApp(this)
+            } catch (_: Exception) {}
+        }
 
         // Initialize Notification Channels
         NotificationHelper.createNotificationChannels(this)
@@ -339,6 +347,7 @@ fun LinkoApp(viewModel: LinkoViewModel) {
                     ChatsScreen(
                         chats = chats,
                         contacts = contacts,
+                        currentUser = (authState as? AuthState.Authenticated)?.user,
                         currentLanguage = currentLanguage,
                         onSelectChat = { chatId ->
                             viewModel.selectChat(chatId)
@@ -519,6 +528,9 @@ fun LinkoApp(viewModel: LinkoViewModel) {
                             viewModel.openOrCreateDirectChat(contactUserId, contactEmail, contactName) {
                                 navController.navigate("direct_chat")
                             }
+                        },
+                        onFecharGoogleMeet = {
+                            viewModel.fecharGoogleMeet(currentChat?.id)
                         }
                     )
                 }
@@ -534,6 +546,26 @@ fun LinkoApp(viewModel: LinkoViewModel) {
                                 }
                             }
                         }
+                    )
+                }
+            }
+
+            if (activeCallState != null) {
+                val call = activeCallState!!
+                if (call.callType == CallType.VIDEO) {
+                    VideoCallScreen(
+                        callState = call,
+                        onToggleMute = { viewModel.toggleMute() },
+                        onToggleVideo = { viewModel.toggleVideo() },
+                        onSwitchCamera = { viewModel.switchCamera() },
+                        onEndCall = { viewModel.fecharGoogleMeet(currentChat?.id) }
+                    )
+                } else {
+                    AudioCallScreen(
+                        callState = call,
+                        onToggleMute = { viewModel.toggleMute() },
+                        onToggleSpeaker = { viewModel.toggleSpeaker() },
+                        onEndCall = { viewModel.fecharGoogleMeet(currentChat?.id) }
                     )
                 }
             }

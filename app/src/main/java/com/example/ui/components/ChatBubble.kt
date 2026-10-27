@@ -40,7 +40,11 @@ import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Poll
 import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -94,6 +98,8 @@ fun ChatBubble(
     isFromMe: Boolean,
     timestampText: String,
     status: String = "SENT", // "SENT", "DELIVERED", "READ"
+    deliveredAt: Long? = null,
+    readAt: Long? = null,
     emailTransportStatus: String? = null, // "PENDING", "DISPATCHED_SMTP", "DELIVERED_INBOX"
     mediaUri: String? = null,
     mediaType: String? = null, // "IMAGE", "VIDEO", "AUDIO", "DOCUMENT", "POLL", "LOCATION", "CONTACT", "EVENT"
@@ -107,6 +113,8 @@ fun ChatBubble(
     onMediaClick: (() -> Unit)? = null,
     onEmailBadgeClick: (() -> Unit)? = null,
     onSwipeToReply: (() -> Unit)? = null,
+    onStatusTicksClick: (() -> Unit)? = null,
+    onFecharGoogleMeet: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val haptic = LocalHapticFeedback.current
@@ -510,32 +518,67 @@ fun ChatBubble(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .border(1.dp, Color(0xFF00897B), RoundedCornerShape(12.dp))
-                                .clickable {
-                                    try {
-                                        uriHandler.openUri(if (extractedUrl.startsWith("http")) extractedUrl else "https://$extractedUrl")
-                                    } catch (_: Exception) {
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            try {
+                                                uriHandler.openUri(if (extractedUrl.startsWith("http")) extractedUrl else "https://$extractedUrl")
+                                            } catch (_: Exception) {
+                                            }
+                                        },
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(0xFF00897B)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(Icons.Default.Videocam, contentDescription = "Google Meet", tint = Color.White, modifier = Modifier.size(20.dp))
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("Google Meet Session", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFF00897B))
+                                        Text("Tap to join Google Meet call", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface)
+                                    }
+                                    Icon(Icons.Default.OpenInNew, contentDescription = "Open Google Meet", tint = Color(0xFF00897B), modifier = Modifier.size(18.dp))
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Button(
+                                        onClick = {
+                                            onFecharGoogleMeet?.invoke()
+                                        },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = Color(0xFFD32F2F),
+                                            contentColor = Color.White
+                                        ),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.CallEnd,
+                                            contentDescription = "Fechar Google Meet",
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "Fechar Google Meet",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
                                     }
                                 }
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .clip(CircleShape)
-                                        .background(Color(0xFF00897B)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(Icons.Default.Videocam, contentDescription = "Google Meet", tint = Color.White, modifier = Modifier.size(20.dp))
-                                }
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text("Google Meet Session", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFF00897B))
-                                    Text("Tap to join Google Meet call", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface)
-                                }
-                                Icon(Icons.Default.OpenInNew, contentDescription = "Open Google Meet", tint = Color(0xFF00897B), modifier = Modifier.size(18.dp))
                             }
                         }
                     }
@@ -574,7 +617,15 @@ fun ChatBubble(
 
                     if (isFromMe) {
                         Spacer(modifier = Modifier.width(4.dp))
-                        MessageStatusTicks(status = status)
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable(enabled = onStatusTicksClick != null) {
+                                    onStatusTicksClick?.invoke()
+                                }
+                        ) {
+                            MessageStatusTicks(status = status)
+                        }
                     }
                 }
 

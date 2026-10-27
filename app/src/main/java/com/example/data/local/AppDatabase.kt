@@ -26,7 +26,7 @@ import com.example.data.local.entity.UserEntity
         CallLogEntity::class,
         StatusEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {

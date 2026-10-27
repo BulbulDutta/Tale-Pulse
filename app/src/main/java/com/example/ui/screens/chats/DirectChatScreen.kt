@@ -136,6 +136,14 @@ import com.example.util.ImageStorageHelper
 import com.example.ui.theme.ChatWallpaper
 import com.example.ui.theme.ChatWallpaperBackground
 import com.example.ui.theme.Emerald500
+import com.example.ui.theme.StatusReadBlue
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.ui.text.style.TextAlign
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -174,6 +182,7 @@ fun DirectChatScreen(
     onToggleAdminRole: (chatId: String, memberUserId: String, makeAdmin: Boolean) -> Unit = { _, _, _ -> },
     onRemoveMember: (chatId: String, memberUserId: String) -> Unit = { _, _ -> },
     onSendPrivateMessage: (contactUserId: String, contactEmail: String, contactName: String) -> Unit = { _, _, _ -> },
+    onFecharGoogleMeet: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var inputText by remember { mutableStateOf("") }
@@ -183,13 +192,50 @@ fun DirectChatScreen(
     var showSecurityDialog by remember { mutableStateOf(false) }
     var showProfileSheet by remember { mutableStateOf(false) }
 
-    val recipientContact = remember(chat, contacts) {
-        if (chat == null) null
-        else contacts.find { "chat_${it.contactUserId}" == chat.id || it.contactDisplayName.equals(chat.name, ignoreCase = true) }
+    val recipientContact = remember(chat, contacts, currentUser) {
+        if (chat == null || chat.isGroup) null
+        else {
+            val participantIds = try {
+                if (chat.participantIdsJson.isBlank()) emptyList()
+                else {
+                    val array = org.json.JSONArray(chat.participantIdsJson)
+                    (0 until array.length()).map { array.getString(it) }
+                }
+            } catch (_: Exception) {
+                emptyList()
+            }
+            val myId = currentUser?.id ?: ""
+            val otherUserId = participantIds.find { it != myId }
+            if (otherUserId != null) {
+                contacts.find { it.contactUserId == otherUserId } ?: contacts.find { it.contactDisplayName.equals(chat.name, ignoreCase = true) }
+            } else {
+                contacts.find { "chat_${it.contactUserId}" == chat.id || it.contactDisplayName.equals(chat.name, ignoreCase = true) }
+            }
+        }
     }
 
     val isGeminiChat = chat?.id == "chat_gemini_ai" || chat?.name?.contains("Gemini") == true
     val isAiBot = isGeminiChat
+
+    val displayTitleName = remember(chat, recipientContact, currentUser) {
+        when {
+            chat == null -> "Chat"
+            isGeminiChat -> "Gemini AI"
+            chat.isGroup -> chat.name
+            recipientContact != null -> recipientContact.contactDisplayName
+            currentUser != null && chat.name.equals(currentUser.displayName, ignoreCase = true) -> "Contact"
+            else -> chat.name.ifBlank { "Contact" }
+        }
+    }
+
+    val displayAvatarUri = remember(chat, recipientContact) {
+        when {
+            chat == null -> null
+            chat.isGroup -> chat.groupIconUri
+            recipientContact != null -> recipientContact.contactAvatarUri
+            else -> chat.groupIconUri
+        }
+    }
 
     val isChatUserOnline = remember(chat, recipientContact, isUserOnline) {
         if (chat == null) false
@@ -213,6 +259,7 @@ fun DirectChatScreen(
     var isRecordingAudio by remember { mutableStateOf(false) }
     var recordingSeconds by remember { mutableStateOf(0) }
     var actionTargetMessage by remember { mutableStateOf<MessageEntity?>(null) }
+    var messageInfoTarget by remember { mutableStateOf<MessageEntity?>(null) }
     var replyingToMessage by remember { mutableStateOf<MessageEntity?>(null) }
 
     val sheetState = rememberModalBottomSheetState()
@@ -510,8 +557,8 @@ fun DirectChatScreen(
                                 }
                             } else {
                                 UserAvatar(
-                                    name = recipientContact?.contactDisplayName ?: chat?.name ?: "Chat",
-                                    avatarUri = recipientContact?.contactAvatarUri ?: chat?.groupIconUri,
+                                    name = displayTitleName,
+                                    avatarUri = displayAvatarUri,
                                     isGroup = chat?.isGroup ?: false,
                                     size = 38.dp,
                                     showOnlineStatus = true,
@@ -521,7 +568,7 @@ fun DirectChatScreen(
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {
                                 Text(
-                                    text = recipientContact?.contactDisplayName ?: chat?.name ?: "Chat",
+                                    text = displayTitleName,
                                     fontSize = 16.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface,
@@ -1052,7 +1099,11 @@ fun DirectChatScreen(
                                     timestampFormatted = formatTime(msg.timestamp),
                                     status = msg.emailTransportStatus
                                 )
-                            }
+                            },
+                            onStatusTicksClick = {
+                                messageInfoTarget = msg
+                            },
+                            onFecharGoogleMeet = onFecharGoogleMeet
                         )
                     }
                 }
@@ -1115,6 +1166,22 @@ fun DirectChatScreen(
             },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    // Message Info Action
+                    TextButton(
+                        onClick = {
+                            val msg = targetMsg
+                            actionTargetMessage = null
+                            messageInfoTarget = msg
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Info, contentDescription = "Message Info", tint = Emerald500)
+                            Spacer(Modifier.width(10.dp))
+                            Text("Message Info (Read & Delivered)", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+
                     // Reply Action
                     TextButton(
                         onClick = {
@@ -1246,7 +1313,9 @@ private fun MessageBubble(
     onSwipeToReply: () -> Unit,
     onVotePoll: (optionIndex: Int) -> Unit,
     onMediaClick: () -> Unit = {},
-    onEmailBadgeClick: () -> Unit
+    onEmailBadgeClick: () -> Unit,
+    onStatusTicksClick: () -> Unit = {},
+    onFecharGoogleMeet: () -> Unit = {}
 ) {
     ChatBubble(
         text = displayText,
@@ -1254,6 +1323,8 @@ private fun MessageBubble(
         isFromMe = isFromMe,
         timestampText = formatTime(message.timestamp),
         status = message.status,
+        deliveredAt = message.deliveredAt,
+        readAt = message.readAt,
         emailTransportStatus = message.emailTransportStatus,
         mediaUri = message.mediaUri,
         mediaType = message.mediaType,
@@ -1266,7 +1337,9 @@ private fun MessageBubble(
         onSwipeToReply = onSwipeToReply,
         onVotePoll = onVotePoll,
         onMediaClick = onMediaClick,
-        onEmailBadgeClick = onEmailBadgeClick
+        onEmailBadgeClick = onEmailBadgeClick,
+        onStatusTicksClick = onStatusTicksClick,
+        onFecharGoogleMeet = onFecharGoogleMeet
     )
 }
 

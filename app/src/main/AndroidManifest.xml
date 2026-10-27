@@ -27,11 +27,6 @@
         android:supportsRtl="true"
         android:requestLegacyExternalStorage="true"
         android:theme="@style/Theme.MyApplication">
-        <!-- Google AdMob Application ID -->
-        <meta-data
-            android:name="com.google.android.gms.ads.APPLICATION_ID"
-            android:value="ca-app-pub-9185028793925317~6973180990" />
-
         <activity
             android:name=".MainActivity"
             android:exported="true"

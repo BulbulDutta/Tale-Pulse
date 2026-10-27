@@ -139,10 +139,24 @@ fun RecipientProfileSheet(
         sharedMediaList.filter { it.mediaType == "AUDIO" }
     }
 
-    val recipientName = recipientContact?.contactDisplayName ?: chat?.name ?: "Contact"
-    val recipientEmail = if (chat?.isGroup == true) "Group Chat • ${sharedMediaList.size} shared files" else (recipientContact?.contactEmail ?: "${recipientName.lowercase().replace(" ", ".")}@linko.net")
-    val avatarUri = recipientContact?.contactAvatarUri ?: chat?.groupIconUri
-    val recipientUserId = if (chat?.isGroup == true) chat.id else (recipientContact?.contactUserId ?: (if (chat?.id?.startsWith("chat_") == true) chat.id.removePrefix("chat_") else "user_unknown"))
+    val participantIds = remember(chat?.participantIdsJson) {
+        try {
+            if (chat?.participantIdsJson.isNullOrBlank()) emptyList()
+            else {
+                val jsonArray = org.json.JSONArray(chat.participantIdsJson)
+                (0 until jsonArray.length()).map { jsonArray.getString(it) }
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+    val otherUserId = participantIds.find { it != currentUser?.id }
+    val resolvedContact = recipientContact ?: if (otherUserId != null) allContacts.find { it.contactUserId == otherUserId } else null
+
+    val recipientName = resolvedContact?.contactDisplayName ?: chat?.name ?: "Contact"
+    val recipientEmail = if (chat?.isGroup == true) "Group Chat • ${sharedMediaList.size} shared files" else (resolvedContact?.contactEmail ?: "${recipientName.lowercase().replace(" ", ".")}@linko.net")
+    val avatarUri = resolvedContact?.contactAvatarUri ?: chat?.groupIconUri
+    val recipientUserId = if (chat?.isGroup == true) chat.id else (resolvedContact?.contactUserId ?: otherUserId ?: "user_unknown")
 
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,

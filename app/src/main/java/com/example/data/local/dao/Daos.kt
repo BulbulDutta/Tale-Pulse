@@ -112,6 +112,12 @@ interface MessageDao {
     @Query("UPDATE messages SET status = :status WHERE id = :messageId")
     suspend fun updateMessageStatus(messageId: String, status: String)
 
+    @Query("UPDATE messages SET status = :status, deliveredAt = COALESCE(:deliveredAt, deliveredAt), readAt = COALESCE(:readAt, readAt) WHERE id = :messageId")
+    suspend fun updateMessageReceipt(messageId: String, status: String, deliveredAt: Long?, readAt: Long?)
+
+    @Query("UPDATE messages SET status = 'DELIVERED', deliveredAt = :deliveredAt WHERE id = :messageId")
+    suspend fun markMessageDelivered(messageId: String, deliveredAt: Long)
+
     @Query("UPDATE messages SET emailTransportStatus = :emailStatus WHERE id = :messageId")
     suspend fun updateEmailTransportStatus(messageId: String, emailStatus: String)
 
@@ -127,8 +133,11 @@ interface MessageDao {
     @Query("DELETE FROM messages WHERE chatId = :chatId")
     suspend fun deleteMessagesForChat(chatId: String)
 
-    @Query("UPDATE messages SET status = 'READ' WHERE chatId = :chatId AND senderId != :currentUserId AND status != 'READ'")
-    suspend fun markUnreadMessagesAsRead(chatId: String, currentUserId: String)
+    @Query("UPDATE messages SET status = 'READ', readAt = :readAt WHERE chatId = :chatId AND senderId != :currentUserId AND status != 'READ'")
+    suspend fun markUnreadMessagesAsRead(chatId: String, currentUserId: String, readAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE messages SET status = 'READ', readAt = :readAt WHERE id = :messageId")
+    suspend fun markSingleMessageAsRead(messageId: String, readAt: Long = System.currentTimeMillis())
 }
 
 @Dao
