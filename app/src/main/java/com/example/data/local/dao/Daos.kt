@@ -103,6 +103,9 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE chatId = :chatId ORDER BY timestamp ASC")
     fun getMessagesForChatFlow(chatId: String): Flow<List<MessageEntity>>
 
+    @Query("SELECT * FROM messages WHERE chatId = :chatId ORDER BY timestamp ASC")
+    suspend fun getMessagesForChatList(chatId: String): List<MessageEntity>
+
     @Query("SELECT * FROM messages WHERE id = :messageId LIMIT 1")
     suspend fun getMessageById(messageId: String): MessageEntity?
 
@@ -112,10 +115,25 @@ interface MessageDao {
     @Query("UPDATE messages SET status = :status WHERE id = :messageId")
     suspend fun updateMessageStatus(messageId: String, status: String)
 
-    @Query("UPDATE messages SET status = :status, deliveredAt = COALESCE(:deliveredAt, deliveredAt), readAt = COALESCE(:readAt, readAt) WHERE id = :messageId")
+    @Query("""
+        UPDATE messages 
+        SET status = CASE 
+            WHEN LOWER(status) = 'read' OR LOWER(:status) = 'read' THEN 'read'
+            WHEN LOWER(status) = 'delivered' OR LOWER(:status) = 'delivered' THEN 'delivered'
+            ELSE 'sent'
+        END,
+        deliveredAt = COALESCE(:deliveredAt, deliveredAt),
+        readAt = COALESCE(:readAt, readAt)
+        WHERE id = :messageId
+    """)
     suspend fun updateMessageReceipt(messageId: String, status: String, deliveredAt: Long?, readAt: Long?)
 
-    @Query("UPDATE messages SET status = 'DELIVERED', deliveredAt = :deliveredAt WHERE id = :messageId")
+    @Query("""
+        UPDATE messages 
+        SET status = 'delivered', 
+            deliveredAt = COALESCE(deliveredAt, :deliveredAt) 
+        WHERE id = :messageId AND LOWER(status) != 'read'
+    """)
     suspend fun markMessageDelivered(messageId: String, deliveredAt: Long)
 
     @Query("UPDATE messages SET emailTransportStatus = :emailStatus WHERE id = :messageId")
@@ -133,10 +151,31 @@ interface MessageDao {
     @Query("DELETE FROM messages WHERE chatId = :chatId")
     suspend fun deleteMessagesForChat(chatId: String)
 
-    @Query("UPDATE messages SET status = 'READ', readAt = :readAt WHERE chatId = :chatId AND senderId != :currentUserId AND status != 'READ'")
+    @Query("""
+        UPDATE messages 
+        SET status = 'read', 
+            deliveredAt = COALESCE(deliveredAt, :readAt), 
+            readAt = COALESCE(readAt, :readAt) 
+        WHERE chatId = :chatId AND senderId != :currentUserId AND LOWER(status) != 'read'
+    """)
     suspend fun markUnreadMessagesAsRead(chatId: String, currentUserId: String, readAt: Long = System.currentTimeMillis())
 
-    @Query("UPDATE messages SET status = 'READ', readAt = :readAt WHERE id = :messageId")
+    @Query("""
+        UPDATE messages 
+        SET status = 'read', 
+            deliveredAt = COALESCE(deliveredAt, :readAt), 
+            readAt = COALESCE(readAt, :readAt) 
+        WHERE id IN (:messageIds) AND LOWER(status) != 'read'
+    """)
+    suspend fun markMessagesAsReadByIds(messageIds: List<String>, readAt: Long = System.currentTimeMillis())
+
+    @Query("""
+        UPDATE messages 
+        SET status = 'read', 
+            deliveredAt = COALESCE(deliveredAt, :readAt), 
+            readAt = COALESCE(readAt, :readAt) 
+        WHERE id = :messageId
+    """)
     suspend fun markSingleMessageAsRead(messageId: String, readAt: Long = System.currentTimeMillis())
 }
 

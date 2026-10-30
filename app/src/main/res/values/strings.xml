@@ -1,7 +1,5 @@
 <resources>
     <string name="app_name">Linko</string>
-    <string name="default_web_client_id">419727588321-vpr8ij7unfkrl7pil0fb8ceb5q1g0tfj.apps.googleusercontent.com</string>
-    <string name="google_app_id">1:419727588321:android:a1b2c3d4e5f6g7h8</string>
-    <string name="gcm_defaultSenderId">419727588321</string>
-    <string name="google_api_key">AIzaSyB_LinkoAppKeyForFirebaseInit</string>
+    <string name="admob_app_id" translatable="false">ca-app-pub-3940256099942544~3347511713</string>
+    <string name="admob_banner_ad_unit_id" translatable="false">ca-app-pub-3940256099942544/6300978111</string>
 </resources>

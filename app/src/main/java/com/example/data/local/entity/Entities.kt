@@ -42,6 +42,28 @@ data class ChatEntity(
     val unreadCount: Int = 0
 )
 
+object MessageStatus {
+    const val SENT = "sent"
+    const val DELIVERED = "delivered"
+    const val READ = "read"
+
+    fun normalize(raw: String?): String {
+        return when (raw?.trim()?.lowercase()) {
+            "read" -> READ
+            "delivered" -> DELIVERED
+            else -> SENT
+        }
+    }
+
+    fun rank(status: String?): Int {
+        return when (normalize(status)) {
+            READ -> 3
+            DELIVERED -> 2
+            else -> 1
+        }
+    }
+}
+
 @Entity(tableName = "messages")
 data class MessageEntity(
     @PrimaryKey val id: String,
@@ -54,7 +76,7 @@ data class MessageEntity(
     val mediaType: String? = null, // "IMAGE", "AUDIO", "DOCUMENT"
     val formattedRichText: String? = null,
     val timestamp: Long = System.currentTimeMillis(),
-    val status: String = "SENT", // "SENT", "DELIVERED", "READ"
+    val status: String = MessageStatus.SENT, // "sent", "delivered", "read"
     val deliveredAt: Long? = null,
     val readAt: Long? = null,
     val emailTransportStatus: String = "DISPATCHED_SMTP", // "PENDING", "DISPATCHED_SMTP", "DELIVERED_INBOX"

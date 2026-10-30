@@ -97,7 +97,7 @@ fun AttachmentBottomSheet(
         ),
         AttachmentOptionItem(
             type = AttachmentType.LOCATION,
-            title = "Location",
+            title = "Google Maps",
             icon = Icons.Default.LocationOn,
             backgroundColor = Color(0xFF00C853)
         ),

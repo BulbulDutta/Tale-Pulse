@@ -10,8 +10,10 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -67,8 +69,9 @@ import com.example.ui.screens.status.StatusScreen
 import com.example.ui.theme.Emerald500
 import com.example.ui.theme.LinkoTheme
 import com.example.ui.viewmodel.LinkoViewModel
-
+import com.example.util.configureAppCheck
 import com.google.firebase.FirebaseApp
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -76,26 +79,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        try {
-            if (FirebaseApp.getApps(this).isEmpty()) {
-                val options = com.google.firebase.FirebaseOptions.Builder()
-                    .setApplicationId(getString(R.string.google_app_id))
-                    .setGcmSenderId(getString(R.string.gcm_defaultSenderId))
-                    .setApiKey(getString(R.string.google_api_key))
-                    .setProjectId("linko-app")
-                    .build()
-                FirebaseApp.initializeApp(this, options)
-            }
-        } catch (_: Exception) {
+        configureAppCheck(this, intent)
+        enableEdgeToEdge()
+
+        // Initialize notification channels in background
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
             try {
-                FirebaseApp.initializeApp(this)
+                NotificationHelper.createNotificationChannels(applicationContext)
             } catch (_: Exception) {}
         }
 
-        // Initialize Notification Channels
-        NotificationHelper.createNotificationChannels(this)
-
-        enableEdgeToEdge()
+        viewModel.enqueueNotificationIntent(intent)
 
         setContent {
             val isDarkMode by viewModel.isDarkMode.collectAsStateWithLifecycle()
@@ -110,6 +104,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        viewModel.enqueueNotificationIntent(intent)
     }
 }
 
@@ -135,14 +130,15 @@ fun LinkoApp(viewModel: LinkoViewModel) {
     val currentLanguage by viewModel.appLanguage.collectAsStateWithLifecycle()
     val translatedMessages by viewModel.translatedMessages.collectAsStateWithLifecycle()
     val actionStatusMessage by viewModel.actionStatusMessage.collectAsStateWithLifecycle()
-
+    val pendingNotificationIntent by viewModel.pendingNotificationIntent.collectAsStateWithLifecycle()
+    val pendingSharedContent by viewModel.pendingSharedContent.collectAsStateWithLifecycle()
+    val fcmToken by viewModel.fcmToken.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
     var showAddContactModal by remember { mutableStateOf(false) }
     var showNotificationPermissionDialog by remember { mutableStateOf(true) }
 
     val context = LocalContext.current
-    val activity = context as? Activity
 
     val handleStartCall: (String, String, String?, CallType) -> Unit = { name, email, avatar, type ->
         if (email.contains("gemini", ignoreCase = true) || name.contains("Gemini", ignoreCase = true)) {
@@ -152,23 +148,28 @@ fun LinkoApp(viewModel: LinkoViewModel) {
         }
     }
 
-    LaunchedEffect(activity?.intent) {
-        activity?.intent?.let { intent ->
-            viewModel.processNotificationIntent(intent, context) { screen, _ ->
+    LaunchedEffect(pendingNotificationIntent, authState) {
+        val intentToProcess = pendingNotificationIntent
+        if (intentToProcess != null && authState is AuthState.Authenticated) {
+            viewModel.consumeNotificationIntent()
+            viewModel.processNotificationIntent(intentToProcess, context) { screen, _ ->
                 when (screen) {
                     NotificationHelper.SCREEN_DIRECT_CHAT -> {
                         navController.navigate("direct_chat") {
                             popUpTo("chats")
+                            launchSingleTop = true
                         }
                     }
                     NotificationHelper.SCREEN_FRIENDS -> {
                         navController.navigate("friends") {
                             popUpTo("chats")
+                            launchSingleTop = true
                         }
                     }
                     "calls" -> {
                         navController.navigate("calls") {
                             popUpTo("chats")
+                            launchSingleTop = true
                         }
                     }
                 }
@@ -220,6 +221,34 @@ fun LinkoApp(viewModel: LinkoViewModel) {
         )
     }
 
+    val activeSharedContent = pendingSharedContent
+    if (activeSharedContent != null && authState is AuthState.Authenticated) {
+        com.example.ui.components.ShareToLinkoSheet(
+            sharedContent = activeSharedContent,
+            contacts = contacts,
+            chats = chats,
+            isUserOnline = { email -> viewModel.isUserOnline(email) },
+            onSendToRecipients = { finalMessageText, selectedContacts, selectedChatIds ->
+                viewModel.sendSharedContentToRecipients(
+                    finalMessageText = finalMessageText,
+                    selectedContacts = selectedContacts,
+                    selectedChatIds = selectedChatIds
+                ) { _ ->
+                    navController.navigate("direct_chat") {
+                        popUpTo("chats")
+                        launchSingleTop = true
+                    }
+                }
+            },
+            onQuickAddContactByEmail = { email, onDone ->
+                viewModel.addContactByEmail(email, onDone)
+            },
+            onDismiss = {
+                viewModel.clearPendingSharedContent()
+            }
+        )
+    }
+
     // Main App Navigation
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
@@ -231,11 +260,12 @@ fun LinkoApp(viewModel: LinkoViewModel) {
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
             if (showBottomBar) {
-                NavigationBar(
-                    containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surface,
-                    modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars)
-                ) {
-                    val totalUnread = chats.sumOf { it.unreadCount }
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    NavigationBar(
+                        containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surface,
+                        modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars)
+                    ) {
+                        val totalUnread = chats.sumOf { it.unreadCount }
 
                     // Chats
                     NavigationBarItem(
@@ -250,7 +280,15 @@ fun LinkoApp(viewModel: LinkoViewModel) {
                                 Icon(Icons.Default.ChatBubble, contentDescription = "Chats")
                             }
                         },
-                        label = { Text(LocalizationManager.getString("tab_chats", currentLanguage)) },
+                        label = {
+                            com.example.ui.components.AutoResizeText(
+                                text = LocalizationManager.getString("tab_chats", currentLanguage),
+                                maxFontSize = 12.sp,
+                                minFontSize = 9.sp,
+                                maxLines = 1
+                            )
+                        },
+                        alwaysShowLabel = true,
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = Emerald500,
                             selectedTextColor = Emerald500,
@@ -272,7 +310,15 @@ fun LinkoApp(viewModel: LinkoViewModel) {
                                 Icon(Icons.Default.HistoryToggleOff, contentDescription = "Status")
                             }
                         },
-                        label = { Text(LocalizationManager.getString("tab_status", currentLanguage)) },
+                        label = {
+                            com.example.ui.components.AutoResizeText(
+                                text = LocalizationManager.getString("tab_status", currentLanguage),
+                                maxFontSize = 12.sp,
+                                minFontSize = 9.sp,
+                                maxLines = 1
+                            )
+                        },
+                        alwaysShowLabel = true,
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = Emerald500,
                             selectedTextColor = Emerald500,
@@ -285,7 +331,15 @@ fun LinkoApp(viewModel: LinkoViewModel) {
                         selected = currentRoute == "friends",
                         onClick = { navController.navigate("friends") { popUpTo("chats") { saveState = true }; launchSingleTop = true; restoreState = true } },
                         icon = { Icon(Icons.Default.People, contentDescription = "Friends") },
-                        label = { Text(LocalizationManager.getString("tab_friends", currentLanguage)) },
+                        label = {
+                            com.example.ui.components.AutoResizeText(
+                                text = LocalizationManager.getString("tab_friends", currentLanguage),
+                                maxFontSize = 12.sp,
+                                minFontSize = 9.sp,
+                                maxLines = 1
+                            )
+                        },
+                        alwaysShowLabel = true,
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = Emerald500,
                             selectedTextColor = Emerald500,
@@ -299,7 +353,15 @@ fun LinkoApp(viewModel: LinkoViewModel) {
                         selected = currentRoute == "calls",
                         onClick = { navController.navigate("calls") { popUpTo("chats") { saveState = true }; launchSingleTop = true; restoreState = true } },
                         icon = { Icon(Icons.Default.Call, contentDescription = "Calls") },
-                        label = { Text(LocalizationManager.getString("tab_calls", currentLanguage)) },
+                        label = {
+                            com.example.ui.components.AutoResizeText(
+                                text = LocalizationManager.getString("tab_calls", currentLanguage),
+                                maxFontSize = 12.sp,
+                                minFontSize = 9.sp,
+                                maxLines = 1
+                            )
+                        },
+                        alwaysShowLabel = true,
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = Emerald500,
                             selectedTextColor = Emerald500,
@@ -312,13 +374,22 @@ fun LinkoApp(viewModel: LinkoViewModel) {
                         selected = currentRoute == "settings",
                         onClick = { navController.navigate("settings") { popUpTo("chats") { saveState = true }; launchSingleTop = true; restoreState = true } },
                         icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
-                        label = { Text(LocalizationManager.getString("tab_settings", currentLanguage)) },
+                        label = {
+                            com.example.ui.components.AutoResizeText(
+                                text = LocalizationManager.getString("tab_settings", currentLanguage),
+                                maxFontSize = 12.sp,
+                                minFontSize = 9.sp,
+                                maxLines = 1
+                            )
+                        },
+                        alwaysShowLabel = true,
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = Emerald500,
                             selectedTextColor = Emerald500,
                             indicatorColor = Emerald500.copy(alpha = 0.15f)
                         )
                     )
+                    }
                 }
             }
         }
@@ -328,6 +399,15 @@ fun LinkoApp(viewModel: LinkoViewModel) {
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
+            LaunchedEffect(authState, currentRoute) {
+                if (authState is AuthState.Authenticated && currentRoute == "auth") {
+                    navController.navigate("chats") {
+                        popUpTo("auth") { inclusive = true }
+                        launchSingleTop = true
+                    }
+                }
+            }
+
             NavHost(
                 navController = navController,
                 startDestination = if (authState is AuthState.Authenticated) "chats" else "auth"
@@ -398,6 +478,7 @@ fun LinkoApp(viewModel: LinkoViewModel) {
                 composable("friends") {
                     FriendsScreen(
                         contacts = contacts,
+                        currentUser = currentUser,
                         isUserOnline = { email -> viewModel.isUserOnline(email) },
                         onOpenChat = { contact ->
                             viewModel.openDirectChat(contact) {
@@ -428,6 +509,8 @@ fun LinkoApp(viewModel: LinkoViewModel) {
                         customWallpaperDimming = customWallpaperDimming,
                         customWallpaperScale = customWallpaperScale,
                         currentLanguage = currentLanguage,
+                        fcmToken = fcmToken,
+                        onRefreshFcmToken = { viewModel.refreshFcmToken(context) },
                         onSelectLanguage = { lang -> viewModel.setAppLanguage(lang) },
                         onToggleDarkMode = { viewModel.toggleDarkMode() },
                         onSelectPalette = { palette -> viewModel.setThemePalette(palette) },
@@ -482,6 +565,9 @@ fun LinkoApp(viewModel: LinkoViewModel) {
                         },
                         onMarkAsRead = { chatId ->
                             viewModel.markChatMessagesAsRead(chatId)
+                        },
+                        onMarkVisibleMessagesAsRead = { chatId, visibleIds ->
+                            viewModel.markVisibleMessagesAsRead(chatId, visibleIds)
                         },
                         onToggleReaction = { messageId, emoji ->
                             viewModel.toggleReaction(messageId, emoji)
@@ -539,12 +625,15 @@ fun LinkoApp(viewModel: LinkoViewModel) {
                     CreateGroupScreen(
                         contacts = contacts,
                         onBackClick = { navController.popBackStack() },
-                        onCreateGroup = { groupName, selectedContacts, groupDesc ->
-                            viewModel.createGroupChat(groupName, selectedContacts, groupDesc) {
+                        onCreateGroup = { groupName, selectedContacts, groupDesc, channelType ->
+                            viewModel.createGroupChat(groupName, selectedContacts, groupDesc, channelType) {
                                 navController.navigate("direct_chat") {
                                     popUpTo("chats")
                                 }
                             }
+                        },
+                        onQuickAddContactByEmail = { email ->
+                            viewModel.addContactByEmail(email) {}
                         }
                     )
                 }

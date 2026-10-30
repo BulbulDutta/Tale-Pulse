@@ -2,7 +2,6 @@ package com.example.data.remote
 
 import android.util.Log
 import com.example.data.local.entity.ContactEntity
-import com.google.firebase.FirebaseApp
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import kotlinx.coroutines.CoroutineScope
@@ -14,11 +13,7 @@ object FirestoreContactService {
     private const val COLLECTION_CONTACTS = "user_contacts"
 
     private fun getFirestore(): FirebaseFirestore? {
-        return try {
-            FirebaseFirestore.getInstance()
-        } catch (_: Throwable) {
-            null
-        }
+        return FirestoreProvider.getInstance()
     }
 
     private var activeSyncListener: ListenerRegistration? = null
@@ -27,6 +22,7 @@ object FirestoreContactService {
      * Upload or update a single contact to Firebase Firestore.
      */
     fun uploadContact(contact: ContactEntity) {
+        if (!FirestoreProvider.isAuthenticated()) return
         val db = getFirestore() ?: return
         try {
             val contactData = mapOf(
@@ -37,12 +33,13 @@ object FirestoreContactService {
                 "contactDisplayName" to contact.contactDisplayName,
                 "contactUsername" to contact.contactUsername,
                 "contactStatus" to contact.contactStatus,
-                "contactAvatarUri" to contact.contactAvatarUri,
+                "contactAvatarUri" to (contact.contactAvatarUri ?: ""),
                 "updatedAt" to System.currentTimeMillis()
             )
 
             // Doc ID format: ownerEmail_contactId
             val docId = "${contact.userEmail.lowercase().trim()}_${contact.id}"
+            val path = "$COLLECTION_CONTACTS/$docId"
             db.collection(COLLECTION_CONTACTS)
                 .document(docId)
                 .set(contactData)
@@ -50,6 +47,7 @@ object FirestoreContactService {
                     Log.d(TAG, "Successfully synced contact ${contact.contactDisplayName} to Firestore")
                 }
                 .addOnFailureListener { e ->
+                    handleFirestoreError(e, OperationType.WRITE, path)
                     Log.e(TAG, "Error syncing contact to Firestore: ${e.message}")
                 }
         } catch (e: Exception) {
@@ -61,6 +59,7 @@ object FirestoreContactService {
      * Upload a batch of contacts to Firestore (e.g., initial local contacts).
      */
     fun uploadContactsBatch(contacts: List<ContactEntity>) {
+        if (!FirestoreProvider.isAuthenticated()) return
         contacts.forEach { uploadContact(it) }
     }
 
@@ -72,6 +71,7 @@ object FirestoreContactService {
         scope: CoroutineScope,
         onContactsReceived: suspend (List<ContactEntity>) -> Unit
     ) {
+        if (!FirestoreProvider.isAuthenticated()) return
         val db = getFirestore() ?: return
         val normalizedEmail = ownerEmail.lowercase().trim()
         if (normalizedEmail.isBlank()) return
@@ -90,7 +90,7 @@ object FirestoreContactService {
                             val contactDisplayName = doc.getString("contactDisplayName") ?: ""
                             val contactUsername = doc.getString("contactUsername") ?: ""
                             val contactStatus = doc.getString("contactStatus") ?: ""
-                            val contactAvatarUri = doc.getString("contactAvatarUri")
+                            val contactAvatarUri = doc.getString("contactAvatarUri")?.ifBlank { null }
 
                             ContactEntity(
                                 id = id,
@@ -110,6 +110,7 @@ object FirestoreContactService {
                     }
                 }
                 .addOnFailureListener { e ->
+                    handleFirestoreError(e, OperationType.LIST, COLLECTION_CONTACTS)
                     Log.e(TAG, "Failed to fetch contacts from Firestore: ${e.message}")
                 }
         } catch (e: Exception) {
@@ -126,7 +127,9 @@ object FirestoreContactService {
         onContactsReceived: suspend (List<ContactEntity>) -> Unit
     ) {
         activeSyncListener?.remove()
+        activeSyncListener = null
 
+        if (!FirestoreProvider.isAuthenticated()) return
         val db = getFirestore() ?: return
         val normalizedEmail = ownerEmail.lowercase().trim()
         if (normalizedEmail.isBlank()) return
@@ -136,6 +139,7 @@ object FirestoreContactService {
                 .whereEqualTo("userEmail", normalizedEmail)
                 .addSnapshotListener { snapshot, error ->
                     if (error != null) {
+                        handleFirestoreError(error, OperationType.LIST, COLLECTION_CONTACTS)
                         Log.e(TAG, "Firestore contact listener error: ${error.message}")
                         return@addSnapshotListener
                     }
@@ -149,7 +153,7 @@ object FirestoreContactService {
                             val contactDisplayName = doc.getString("contactDisplayName") ?: ""
                             val contactUsername = doc.getString("contactUsername") ?: ""
                             val contactStatus = doc.getString("contactStatus") ?: ""
-                            val contactAvatarUri = doc.getString("contactAvatarUri")
+                            val contactAvatarUri = doc.getString("contactAvatarUri")?.ifBlank { null }
 
                             ContactEntity(
                                 id = id,

@@ -52,12 +52,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -97,7 +100,7 @@ fun ChatBubble(
     senderName: String? = null,
     isFromMe: Boolean,
     timestampText: String,
-    status: String = "SENT", // "SENT", "DELIVERED", "READ"
+    status: String = "sent", // "sent", "delivered", "read"
     deliveredAt: Long? = null,
     readAt: Long? = null,
     emailTransportStatus: String? = null, // "PENDING", "DISPATCHED_SMTP", "DELIVERED_INBOX"
@@ -344,70 +347,13 @@ fun ChatBubble(
                     }
 
                     "AUDIO" -> {
-                        val context = LocalContext.current
-                        val audioTargetUri = mediaUri ?: ""
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant)
-                                .padding(8.dp)
-                        ) {
-                            IconButton(
-                                onClick = {
-                                    if (audioTargetUri.isNotBlank()) {
-                                        if (isPlayingAudio) {
-                                            com.example.util.AudioPlayerManager.pauseAudio()
-                                            isPlayingAudio = false
-                                        } else {
-                                            isPlayingAudio = true
-                                            com.example.util.AudioPlayerManager.playAudio(context, audioTargetUri) {
-                                                isPlayingAudio = false
-                                            }
-                                        }
-                                    } else {
-                                        isPlayingAudio = !isPlayingAudio
-                                    }
-                                },
-                                modifier = Modifier.size(36.dp)
-                            ) {
-                                Icon(
-                                    imageVector = if (isPlayingAudio) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                    contentDescription = if (isPlayingAudio) "Pause Voice Note" else "Play Voice Note",
-                                    tint = Emerald500
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = if (isPlayingAudio) "🔊 Voice Note • Playing..." else "🎙️ Voice Note • AAC/m4a",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = if (isPlayingAudio) "||l|i|l|ll|i|l|ll||l|i" else "|i|ll|i|l|ll||l|i|ll|i",
-                                    fontSize = 12.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = Emerald500
-                                )
-                            }
-                            if (!mediaUri.isNullOrEmpty()) {
-                                IconButton(
-                                    onClick = { onMediaClick?.invoke() },
-                                    modifier = Modifier.size(32.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Download,
-                                        contentDescription = "Download Audio",
-                                        tint = Emerald500,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(6.dp))
+                        VoiceNoteBubbleContent(
+                            text = text,
+                            mediaUri = mediaUri,
+                            isFromMe = isFromMe,
+                            onDownloadClick = onMediaClick
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
                     }
 
                     "DOCUMENT" -> {
@@ -492,7 +438,14 @@ fun ChatBubble(
                     text.endsWith(".png", ignoreCase = true)
                 )
 
-                if (text.isNotBlank() && mediaType?.uppercase() !in listOf("POLL", "LOCATION", "CONTACT", "EVENT") && !isDefaultImageMetadata) {
+                val isDefaultAudioMetadata = mediaType?.uppercase() == "AUDIO" && (
+                    text.isBlank() ||
+                    text.startsWith("🎙️ Voice Note", ignoreCase = true) ||
+                    text.startsWith("Voice Note", ignoreCase = true) ||
+                    text.equals("Audio Recording Note", ignoreCase = true)
+                )
+
+                if (text.isNotBlank() && mediaType?.uppercase() !in listOf("POLL", "LOCATION", "CONTACT", "EVENT") && !isDefaultImageMetadata && !isDefaultAudioMetadata) {
                     val fontStyle = if (formattedRichText == "ITALIC") FontStyle.Italic else FontStyle.Normal
                     val fontWeight = if (formattedRichText == "BOLD") FontWeight.Bold else FontWeight.Normal
                     val fontFamily = if (formattedRichText == "CODE") FontFamily.Monospace else FontFamily.Default
@@ -814,56 +767,285 @@ fun PollBubbleContent(
 
 @Composable
 fun LocationBubbleContent(locationJsonStr: String) {
-    var title = "Pinned Location"
-    var address = "San Francisco, CA"
-    var lat = 37.7749
-    var lng = -122.4194
-
-    try {
-        val json = JSONObject(locationJsonStr)
-        title = json.optString("title", "Pinned Location")
-        address = json.optString("address", "San Francisco, CA")
-        lat = json.optDouble("latitude", 37.7749)
-        lng = json.optDouble("longitude", -122.4194)
-    } catch (e: Exception) {
-        title = locationJsonStr
+    val context = LocalContext.current
+    val sharedLoc = remember(locationJsonStr) {
+        com.example.data.remote.SharedMapLocation.fromJsonString(locationJsonStr)
     }
+
+    val pinColor = if (sharedLoc.isLiveLocation) Color(0xFFE53935) else Color(0xFFEA4335)
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(10.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f))
+            .border(
+                width = 1.dp,
+                color = if (sharedLoc.isLiveLocation) Color(0xFFE53935).copy(alpha = 0.45f)
+                else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(14.dp)
+            )
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFF00C853)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.LocationOn,
-                    contentDescription = "Location",
-                    tint = Color.White,
-                    modifier = Modifier.size(20.dp)
+        // Clickable Google Maps Mini-Map Preview Banner
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(112.dp)
+                .clip(RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp))
+                .clickable {
+                    com.example.data.remote.GoogleMapsLocationService.openInGoogleMaps(
+                        context = context,
+                        lat = sharedLoc.latitude,
+                        lng = sharedLoc.longitude,
+                        title = sharedLoc.title
+                    )
+                }
+                .testTag("location_bubble_map_preview")
+        ) {
+            androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                val w = size.width
+                val h = size.height
+
+                // Map base
+                drawRect(color = Color(0xFFE8EEF5))
+
+                // Park zones
+                drawRect(
+                    color = Color(0xFFC8E6C9).copy(alpha = 0.75f),
+                    topLeft = androidx.compose.ui.geometry.Offset(w * 0.04f, h * 0.08f),
+                    size = androidx.compose.ui.geometry.Size(w * 0.3f, h * 0.45f)
+                )
+                drawRect(
+                    color = Color(0xFFAECBFA).copy(alpha = 0.65f),
+                    topLeft = androidx.compose.ui.geometry.Offset(w * 0.65f, h * 0.58f),
+                    size = androidx.compose.ui.geometry.Size(w * 0.35f, h * 0.42f)
+                )
+
+                // Streets
+                for (i in 1..3) {
+                    val y = h * (i / 4f)
+                    drawLine(
+                        color = Color.White,
+                        start = androidx.compose.ui.geometry.Offset(0f, y),
+                        end = androidx.compose.ui.geometry.Offset(w, y),
+                        strokeWidth = 4.5f
+                    )
+                }
+                for (i in 1..4) {
+                    val x = w * (i / 5f)
+                    drawLine(
+                        color = Color.White,
+                        start = androidx.compose.ui.geometry.Offset(x, 0f),
+                        end = androidx.compose.ui.geometry.Offset(x, h),
+                        strokeWidth = 4.5f
+                    )
+                }
+
+                // Highway
+                drawLine(
+                    color = Color(0xFFFDE293),
+                    start = androidx.compose.ui.geometry.Offset(0f, h * 0.3f),
+                    end = androidx.compose.ui.geometry.Offset(w, h * 0.68f),
+                    strokeWidth = 9f
+                )
+
+                // Center accuracy halo & dot
+                val center = androidx.compose.ui.geometry.Offset(w * 0.5f, h * 0.54f)
+                drawCircle(
+                    color = (if (sharedLoc.isLiveLocation) Color(0xFFE53935) else Color(0xFF1A73E8)).copy(alpha = 0.22f),
+                    radius = 22f,
+                    center = center
+                )
+                drawCircle(
+                    color = Color.White,
+                    radius = 9f,
+                    center = center
+                )
+                drawCircle(
+                    color = if (sharedLoc.isLiveLocation) Color(0xFFE53935) else Color(0xFF1A73E8),
+                    radius = 6f,
+                    center = center
                 )
             }
-            Spacer(modifier = Modifier.width(10.dp))
-            Column {
-                Text(text = title, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                Text(text = address, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+            // Google Maps / Live Status Badge
+            Surface(
+                color = if (sharedLoc.isLiveLocation) Color(0xFFE53935) else Color.White.copy(alpha = 0.92f),
+                shape = RoundedCornerShape(8.dp),
+                shadowElevation = 2.dp,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.LocationOn,
+                        contentDescription = null,
+                        tint = if (sharedLoc.isLiveLocation) Color.White else Color(0xFF1A73E8),
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text(
+                        text = if (sharedLoc.isLiveLocation) "LIVE ON GOOGLE MAPS" else "Google Maps",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (sharedLoc.isLiveLocation) Color.White else Color(0xFF1F2937)
+                    )
+                }
+            }
+
+            // Center Pin Marker
+            Icon(
+                imageVector = Icons.Default.LocationOn,
+                contentDescription = "Google Maps Pin",
+                tint = pinColor,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(bottom = 18.dp)
+                    .size(30.dp)
+            )
+        }
+
+        // Location Details & Actions
+        Column(modifier = Modifier.padding(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = sharedLoc.title,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    if (sharedLoc.address.isNotBlank()) {
+                        Text(
+                            text = sharedLoc.address,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Text(
+                text = String.format(
+                    java.util.Locale.US,
+                    "GPS: %.5f, %.5f",
+                    sharedLoc.latitude,
+                    sharedLoc.longitude
+                ),
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                color = Emerald500
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Action Buttons: Open in Google Maps | Directions | Share
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Button(
+                    onClick = {
+                        com.example.data.remote.GoogleMapsLocationService.openInGoogleMaps(
+                            context = context,
+                            lat = sharedLoc.latitude,
+                            lng = sharedLoc.longitude,
+                            title = sharedLoc.title
+                        )
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF1A73E8),
+                        contentColor = Color.White
+                    ),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(32.dp)
+                        .testTag("open_google_maps_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.OpenInNew,
+                        contentDescription = "Open in Google Maps",
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Open in Maps",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
+                }
+
+                Button(
+                    onClick = {
+                        com.example.data.remote.GoogleMapsLocationService.openDirectionsInGoogleMaps(
+                            context = context,
+                            lat = sharedLoc.latitude,
+                            lng = sharedLoc.longitude,
+                            title = sharedLoc.title
+                        )
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Emerald500,
+                        contentColor = Color.White
+                    ),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(32.dp)
+                        .testTag("directions_google_maps_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.LocationOn,
+                        contentDescription = "Directions",
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Directions",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
+                }
+
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable {
+                            com.example.data.remote.GoogleMapsLocationService.shareLocationExternally(
+                                context = context,
+                                location = sharedLoc
+                            )
+                        }
+                        .testTag("share_google_maps_link_button")
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Reply,
+                            contentDescription = "Share Google Maps Link",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
             }
         }
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(
-            text = "GPS: $lat, $lng",
-            fontSize = 10.sp,
-            fontFamily = FontFamily.Monospace,
-            color = Emerald500
-        )
     }
 }
 
@@ -947,3 +1129,239 @@ fun EventBubbleContent(eventJsonStr: String) {
         }
     }
 }
+
+@Composable
+fun VoiceNoteBubbleContent(
+    text: String,
+    mediaUri: String?,
+    isFromMe: Boolean,
+    onDownloadClick: (() -> Unit)? = null
+) {
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    val audioTargetUri = mediaUri ?: ""
+
+    var isPlaying by remember(audioTargetUri) {
+        mutableStateOf(com.example.util.AudioPlayerManager.isPlaying(audioTargetUri))
+    }
+    var progress by remember(audioTargetUri) { mutableFloatStateOf(0f) }
+    var currentPosMs by remember(audioTargetUri) { mutableIntStateOf(0) }
+    var playbackSpeed by remember { mutableFloatStateOf(1.0f) }
+
+    // Parse fallback duration from label e.g. "🎙️ Voice Note (0:05)"
+    val parsedDurationMs = remember(text, audioTargetUri) {
+        val fileDuration = com.example.util.AudioPlayerManager.getDurationMs(context, audioTargetUri)
+        if (fileDuration > 0) {
+            fileDuration
+        } else {
+            val match = Regex("""(\d+):(\d{2})""").find(text)
+            if (match != null) {
+                val mins = match.groupValues[1].toIntOrNull() ?: 0
+                val secs = match.groupValues[2].toIntOrNull() ?: 4
+                ((mins * 60 + secs) * 1000).coerceAtLeast(1000)
+            } else {
+                4000
+            }
+        }
+    }
+
+    // Generate deterministic, organic-looking waveform bars per voice note
+    val waveformBars = remember(audioTargetUri, text) {
+        val seed = (audioTargetUri + text).hashCode()
+        val rng = java.util.Random(seed.toLong())
+        List(28) { idx ->
+            val centerWeight = 1f - kotlin.math.abs((idx - 13.5f) / 16f) * 0.45f
+            (0.22f + rng.nextFloat() * 0.78f * centerWeight).coerceIn(0.18f, 1.0f)
+        }
+    }
+
+    LaunchedEffect(isPlaying, audioTargetUri, playbackSpeed) {
+        if (isPlaying) {
+            val startTick = System.currentTimeMillis()
+            val initialOffsetMs = currentPosMs
+            while (isPlaying) {
+                if (audioTargetUri.isNotBlank() && com.example.util.AudioPlayerManager.isPlaying(audioTargetUri)) {
+                    val livePos = com.example.util.AudioPlayerManager.getCurrentPositionMs(audioTargetUri)
+                    val liveProg = com.example.util.AudioPlayerManager.getProgress(audioTargetUri)
+                    currentPosMs = livePos
+                    progress = liveProg
+                } else {
+                    // Smooth fallback progression if URI is synthetic or completed
+                    val elapsed = ((System.currentTimeMillis() - startTick) * playbackSpeed).toInt()
+                    val simulatedPos = (initialOffsetMs + elapsed).coerceAtMost(parsedDurationMs)
+                    currentPosMs = simulatedPos
+                    progress = (simulatedPos.toFloat() / parsedDurationMs.toFloat()).coerceIn(0f, 1f)
+                    if (simulatedPos >= parsedDurationMs) {
+                        isPlaying = false
+                        progress = 0f
+                        currentPosMs = 0
+                        break
+                    }
+                }
+                delay(60)
+            }
+        }
+    }
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f))
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+            .testTag("voice_note_bubble_container")
+    ) {
+        // Play / Pause Circular Button (minimum 48dp touch target)
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                .clip(CircleShape)
+                .clickable {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    if (isPlaying) {
+                        com.example.util.AudioPlayerManager.pauseAudio()
+                        isPlaying = false
+                    } else {
+                        isPlaying = true
+                        if (audioTargetUri.isNotBlank()) {
+                            com.example.util.AudioPlayerManager.playAudio(
+                                context = context,
+                                audioUri = audioTargetUri,
+                                speed = playbackSpeed
+                            ) {
+                                isPlaying = false
+                                progress = 0f
+                                currentPosMs = 0
+                            }
+                        }
+                    }
+                }
+                .testTag("voice_note_play_button"),
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(Emerald500),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = if (isPlaying) "Pause Voice Note" else "Play Voice Note",
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.width(8.dp))
+
+        // Waveform Scrubber + Duration Footer
+        Column(modifier = Modifier.weight(1f)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(28.dp)
+                    .pointerInput(audioTargetUri, parsedDurationMs) {
+                        detectTapGestures { offset ->
+                            if (size.width > 0) {
+                                val fraction = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
+                                progress = fraction
+                                currentPosMs = (parsedDurationMs * fraction).toInt()
+                                if (audioTargetUri.isNotBlank()) {
+                                    com.example.util.AudioPlayerManager.seekToFraction(audioTargetUri, fraction)
+                                }
+                            }
+                        }
+                    }
+                    .testTag("voice_note_waveform")
+            ) {
+                waveformBars.forEachIndexed { idx, amplitude ->
+                    val barFraction = idx.toFloat() / waveformBars.size.toFloat()
+                    val isPlayed = barFraction <= progress
+                    val barHeight = (6.dp + (18.dp * amplitude))
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(barHeight)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(
+                                if (isPlayed) Emerald500
+                                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                            )
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val displayedMs = if (isPlaying || currentPosMs > 0) currentPosMs else parsedDurationMs
+                Text(
+                    text = "${formatAudioMs(displayedMs)} • Voice Note",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (isPlaying) Emerald500 else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                // Playback Speed Pill (1x / 1.5x / 2x)
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = Emerald500.copy(alpha = 0.16f),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            playbackSpeed = when (playbackSpeed) {
+                                1.0f -> 1.5f
+                                1.5f -> 2.0f
+                                else -> 1.0f
+                            }
+                            com.example.util.AudioPlayerManager.setPlaybackSpeed(playbackSpeed)
+                        }
+                        .testTag("voice_note_speed_button")
+                ) {
+                    val speedText = if (playbackSpeed == 1.0f) "1x" else if (playbackSpeed == 1.5f) "1.5x" else "2x"
+                    Text(
+                        text = speedText,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Emerald500,
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                    )
+                }
+            }
+        }
+
+        if (!mediaUri.isNullOrEmpty() && onDownloadClick != null) {
+            Spacer(modifier = Modifier.width(4.dp))
+            IconButton(
+                onClick = { onDownloadClick.invoke() },
+                modifier = Modifier.size(32.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Download,
+                    contentDescription = "Save Voice Note",
+                    tint = Emerald500,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+}
+
+private fun formatAudioMs(ms: Int): String {
+    val totalSeconds = (ms / 1000).coerceAtLeast(0)
+    val mins = totalSeconds / 60
+    val secs = totalSeconds % 60
+    return String.format(java.util.Locale.getDefault(), "%d:%02d", mins, secs)
+}
+

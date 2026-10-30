@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -108,11 +109,20 @@ fun CallsScreen(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Emerald500),
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp)
                 ) {
                     Icon(Icons.Default.Call, contentDescription = "Voice Call", tint = Color.White, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("New Voice Call", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    com.example.ui.components.AutoResizeText(
+                        text = "New Voice Call",
+                        color = Color.White,
+                        maxFontSize = 13.sp,
+                        minFontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
                 }
 
                 Button(
@@ -122,22 +132,35 @@ fun CallsScreen(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp)
                 ) {
                     Icon(Icons.Default.Videocam, contentDescription = "Video Call", tint = Color.White, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("New Video Call", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    com.example.ui.components.AutoResizeText(
+                        text = "New Video Call",
+                        color = Color.White,
+                        maxFontSize = 13.sp,
+                        minFontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
                 }
             }
 
             if (callLogs.isEmpty()) {
                 Box(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .padding(32.dp),
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 16.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
                         Icon(
                             imageVector = Icons.Default.PhoneInTalk,
                             contentDescription = "Calls",
@@ -145,8 +168,10 @@ fun CallsScreen(
                             modifier = Modifier.size(64.dp)
                         )
                         Spacer(modifier = Modifier.height(16.dp))
-                        Text(
+                        com.example.ui.components.AutoResizeText(
                             text = "No recent call history",
+                            maxFontSize = 17.sp,
+                            minFontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
@@ -154,24 +179,33 @@ fun CallsScreen(
                         Text(
                             text = "Start audio or video calls with your contacts directly.",
                             fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
                         )
                         Spacer(modifier = Modifier.height(20.dp))
                         Button(
                             onClick = { showStartCallModal = true },
                             colors = ButtonDefaults.buttonColors(containerColor = Emerald500),
-                            shape = RoundedCornerShape(20.dp)
+                            shape = RoundedCornerShape(20.dp),
+                            modifier = Modifier.heightIn(min = 48.dp)
                         ) {
                             Icon(Icons.Default.Call, contentDescription = null, tint = Color.White)
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Start a Call", color = Color.White, fontWeight = FontWeight.Bold)
+                            com.example.ui.components.AutoResizeText(
+                                text = "Start a Call",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                maxFontSize = 14.sp,
+                                minFontSize = 11.sp
+                            )
                         }
                     }
                 }
             } else {
                 LazyColumn(
                     modifier = Modifier
-                        .fillMaxSize()
+                        .weight(1f)
+                        .fillMaxWidth()
                         .padding(vertical = 4.dp)
                 ) {
                     items(callLogs, key = { it.id }) { log ->
@@ -231,7 +265,10 @@ private fun CallLogItemRow(
                         text = log.contactName,
                         fontWeight = FontWeight.Bold,
                         fontSize = 15.sp,
-                        color = if (log.isMissed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                        color = if (log.isMissed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Icon(
@@ -252,7 +289,9 @@ private fun CallLogItemRow(
                     Text(
                         text = "${formatDateTime(log.timestamp)} • ${if (log.durationSeconds > 0) "${log.durationSeconds}s" else "Missed"} • E2EE",
                         fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
                 }
             }

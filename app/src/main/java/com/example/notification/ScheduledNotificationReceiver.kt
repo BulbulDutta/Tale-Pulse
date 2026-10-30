@@ -11,71 +11,33 @@ class ScheduledNotificationReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val type = intent.getStringExtra(EXTRA_NOTIF_TYPE) ?: TYPE_MESSAGE
+        val chatId = intent.getStringExtra(NotificationHelper.EXTRA_CHAT_ID) ?: "chat_1"
+        val senderName = intent.getStringExtra(EXTRA_SENDER_NAME) ?: "Elena Vance"
+        val messageText = intent.getStringExtra(EXTRA_MESSAGE_TEXT)
+            ?: "Hey! Here is a direct message update from Linko 🌟"
+        val callerName = intent.getStringExtra(NotificationHelper.EXTRA_CALLER_NAME) ?: "Marcus Miller"
+        val callerEmail = intent.getStringExtra(NotificationHelper.EXTRA_CALLER_EMAIL) ?: "marcus@linko.com"
+        val callType = intent.getStringExtra(NotificationHelper.EXTRA_CALL_TYPE) ?: "Voice"
+        val requesterName = intent.getStringExtra(NotificationHelper.EXTRA_REQUESTER_NAME) ?: "Sophia Chen"
+        val requesterEmail = intent.getStringExtra(NotificationHelper.EXTRA_REQUESTER_EMAIL) ?: "sophia@linko.com"
 
-        when (type) {
-            TYPE_MESSAGE -> {
-                val chatId = intent.getStringExtra(NotificationHelper.EXTRA_CHAT_ID) ?: "chat_1"
-                val senderName = intent.getStringExtra(EXTRA_SENDER_NAME) ?: "Elena Vance"
-                val text = intent.getStringExtra(EXTRA_MESSAGE_TEXT)
-                    ?: "Hey! Here is a direct message update from Linko 🌟"
+        val fcmPayload = mapOf(
+            "type" to type,
+            "chat_id" to chatId,
+            "sender_name" to senderName,
+            "message_text" to messageText,
+            "is_group" to (type == TYPE_GROUP_MESSAGE).toString(),
+            "caller_name" to callerName,
+            "caller_email" to callerEmail,
+            "call_type" to callType,
+            "requester_name" to requesterName,
+            "requester_email" to requesterEmail
+        )
 
-                NotificationHelper.showNewMessageNotification(
-                    context = context,
-                    chatId = chatId,
-                    senderName = senderName,
-                    messageText = text,
-                    isGroup = false
-                )
-            }
-            TYPE_GROUP_MESSAGE -> {
-                val chatId = intent.getStringExtra(NotificationHelper.EXTRA_CHAT_ID) ?: "group_1"
-                val senderName = intent.getStringExtra(EXTRA_SENDER_NAME) ?: "Design Team (Alex)"
-                val text = intent.getStringExtra(EXTRA_MESSAGE_TEXT)
-                    ?: "Hey everyone! New group update posted in Linko 🚀"
-
-                NotificationHelper.showNewMessageNotification(
-                    context = context,
-                    chatId = chatId,
-                    senderName = senderName,
-                    messageText = text,
-                    isGroup = true
-                )
-            }
-            TYPE_CALL -> {
-                val callerName = intent.getStringExtra(NotificationHelper.EXTRA_CALLER_NAME) ?: "Marcus Miller"
-                val callerEmail = intent.getStringExtra(NotificationHelper.EXTRA_CALLER_EMAIL) ?: "marcus@linko.com"
-                val callType = intent.getStringExtra(NotificationHelper.EXTRA_CALL_TYPE) ?: "Voice"
-
-                NotificationHelper.showIncomingCallNotification(
-                    context = context,
-                    callerName = callerName,
-                    callerEmail = callerEmail,
-                    callType = callType
-                )
-            }
-            TYPE_MISSED_CALL -> {
-                val callerName = intent.getStringExtra(NotificationHelper.EXTRA_CALLER_NAME) ?: "Marcus Miller"
-                val callerEmail = intent.getStringExtra(NotificationHelper.EXTRA_CALLER_EMAIL) ?: "marcus@linko.com"
-                val callType = intent.getStringExtra(NotificationHelper.EXTRA_CALL_TYPE) ?: "Voice"
-
-                NotificationHelper.showMissedCallNotification(
-                    context = context,
-                    callerName = callerName,
-                    callerEmail = callerEmail,
-                    callType = callType
-                )
-            }
-            TYPE_FRIEND_REQUEST -> {
-                val requesterName = intent.getStringExtra(NotificationHelper.EXTRA_REQUESTER_NAME) ?: "Sophia Chen"
-                val requesterEmail = intent.getStringExtra(NotificationHelper.EXTRA_REQUESTER_EMAIL) ?: "sophia@linko.com"
-
-                NotificationHelper.showFriendRequestNotification(
-                    context = context,
-                    requesterName = requesterName,
-                    requesterEmail = requesterEmail
-                )
-            }
-        }
+        LinkoFirebaseMessagingService.dispatchRemotePayload(
+            context = context,
+            data = fcmPayload
+        )
     }
 
     companion object {

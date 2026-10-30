@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -21,6 +22,7 @@ import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Button
@@ -42,17 +44,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.entity.ContactEntity
+import com.example.data.local.entity.UserEntity
 import com.example.data.model.CallType
+import com.example.ui.components.ShareProfileQrDialog
 import com.example.ui.components.UserAvatar
 import com.example.ui.theme.Emerald500
 
 @Composable
 fun FriendsScreen(
     contacts: List<ContactEntity>,
+    currentUser: UserEntity? = null,
     isUserOnline: (String?) -> Boolean = { false },
     onOpenChat: (ContactEntity) -> Unit,
     onStartCall: (contactName: String, contactEmail: String, contactAvatar: String?, callType: CallType) -> Unit,
@@ -61,6 +67,14 @@ fun FriendsScreen(
     modifier: Modifier = Modifier
 ) {
     var searchQuery by remember { mutableStateOf("") }
+    var showShareQrDialog by remember { mutableStateOf(false) }
+
+    if (showShareQrDialog) {
+        ShareProfileQrDialog(
+            user = currentUser,
+            onDismiss = { showShareQrDialog = false }
+        )
+    }
 
     val filteredContacts = remember(contacts, searchQuery) {
         contacts.filter { contact ->
@@ -108,7 +122,7 @@ fun FriendsScreen(
                         singleLine = true,
                         modifier = Modifier
                             .weight(1f)
-                            .height(50.dp)
+                            .heightIn(min = 50.dp)
                     )
 
                     Spacer(modifier = Modifier.width(8.dp))
@@ -137,7 +151,10 @@ fun FriendsScreen(
                         onClick = onCreateGroupClick,
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                         shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp)
+                            .testTag("friends_create_group_button")
                     ) {
                         Icon(
                             imageVector = Icons.Default.GroupAdd,
@@ -145,10 +162,38 @@ fun FriendsScreen(
                             tint = Emerald500
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Create Custom Group Chat",
+                        com.example.ui.components.AutoResizeText(
+                            text = "New Group / Channel",
                             color = MaterialTheme.colorScheme.onSurface,
-                            fontSize = 13.sp
+                            maxFontSize = 13.sp,
+                            minFontSize = 10.sp,
+                            maxLines = 1
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Button(
+                        onClick = { showShareQrDialog = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = Emerald500.copy(alpha = 0.16f)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .testTag("friends_share_qr_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.QrCode2,
+                            contentDescription = "Share Contact QR",
+                            tint = Emerald500
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        com.example.ui.components.AutoResizeText(
+                            text = "My QR",
+                            color = Emerald500,
+                            fontWeight = FontWeight.Bold,
+                            maxFontSize = 13.sp,
+                            minFontSize = 10.sp,
+                            maxLines = 1
                         )
                     }
                 }
@@ -158,17 +203,21 @@ fun FriendsScreen(
             if (filteredContacts.isEmpty()) {
                 Box(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .padding(32.dp),
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 16.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(16.dp)
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp)
                     ) {
-                        Text(
+                        com.example.ui.components.AutoResizeText(
                             text = if (contacts.isEmpty()) "No friends added yet" else "No matching contacts",
-                            fontSize = 18.sp,
+                            maxFontSize = 18.sp,
+                            minFontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
@@ -184,7 +233,8 @@ fun FriendsScreen(
             } else {
                 LazyColumn(
                     modifier = Modifier
-                        .fillMaxSize()
+                        .weight(1f)
+                        .fillMaxWidth()
                         .padding(vertical = 4.dp)
                 ) {
                     items(filteredContacts, key = { it.id }) { contact ->
@@ -258,18 +308,23 @@ private fun ContactItemRow(
                     text = contact.contactDisplayName,
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                 )
                 Text(
                     text = contact.contactEmail,
                     fontSize = 12.sp,
-                    color = Emerald500
+                    color = Emerald500,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                 )
                 Text(
                     text = contact.contactStatus,
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                 )
             }
 

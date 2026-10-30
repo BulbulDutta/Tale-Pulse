@@ -105,6 +105,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -150,6 +151,8 @@ fun SettingsScreen(
     customWallpaperDimming: Float = 0.3f,
     customWallpaperScale: String = "CROP",
     currentLanguage: AppLanguage = AppLanguage.ENGLISH,
+    fcmToken: String = "Active",
+    onRefreshFcmToken: () -> Unit = {},
     onSelectLanguage: (AppLanguage) -> Unit = {},
     onToggleDarkMode: () -> Unit,
     onSelectPalette: (AppThemePalette) -> Unit,
@@ -557,7 +560,7 @@ fun SettingsScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp)
-                    .height(50.dp)
+                    .heightIn(min = 50.dp)
                     .testTag("sign_out_button")
             ) {
                 Icon(
@@ -566,9 +569,11 @@ fun SettingsScreen(
                     tint = MaterialTheme.colorScheme.onErrorContainer
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(
+                com.example.ui.components.AutoResizeText(
                     text = "Sign Out Account",
                     fontWeight = FontWeight.Bold,
+                    maxFontSize = 15.sp,
+                    minFontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onErrorContainer
                 )
             }
@@ -684,8 +689,14 @@ fun SettingsScreen(
             SettingsDialogType.APPEARANCE -> AppearanceSettingsDialog(
                 isDarkMode = isDarkMode,
                 currentPalette = currentPalette,
+                currentWallpaper = currentWallpaper,
+                customWallpaperUri = customWallpaperUri,
+                customWallpaperDimming = customWallpaperDimming,
+                customWallpaperScale = customWallpaperScale,
                 onToggleDarkMode = onToggleDarkMode,
                 onSelectPalette = onSelectPalette,
+                onSelectWallpaper = onSelectWallpaper,
+                onPickCustomWallpaper = { galleryLauncher.launch("image/*") },
                 onDismiss = { activeDialog = SettingsDialogType.NONE }
             )
             SettingsDialogType.BROADCASTS -> BroadcastsSettingsDialog(
@@ -694,6 +705,8 @@ fun SettingsScreen(
             )
             SettingsDialogType.NOTIFICATIONS -> NotificationsSettingsDialog(
                 primaryColor = currentPalette.primaryColor,
+                fcmToken = fcmToken,
+                onRefreshFcmToken = onRefreshFcmToken,
                 onTriggerMessageNotification = onTriggerMessageNotification,
                 onTriggerCallNotification = onTriggerCallNotification,
                 onTriggerFriendRequestNotification = onTriggerFriendRequestNotification,
@@ -1123,6 +1136,204 @@ private fun ListsSettingsDialog(primaryColor: Color, onDismiss: () -> Unit) {
 }
 
 @Composable
+private fun WallpaperSelectionSection(
+    currentWallpaper: ChatWallpaper,
+    customWallpaperUri: String?,
+    customWallpaperDimming: Float,
+    customWallpaperScale: String,
+    isDarkMode: Boolean,
+    primaryColor: Color,
+    onSelectWallpaper: (ChatWallpaper) -> Unit,
+    onPickCustomWallpaper: () -> Unit
+) {
+    val allWallpapers = remember { ChatWallpaper.selectableWallpapers }
+
+    Text(
+        text = "Chat Wallpaper (${allWallpapers.size} Options)",
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 14.sp
+    )
+    Text(
+        text = "Current: ${currentWallpaper.displayName}",
+        fontSize = 12.sp,
+        color = primaryColor,
+        fontWeight = FontWeight.Medium
+    )
+    Spacer(modifier = Modifier.height(8.dp))
+
+    Button(
+        onClick = onPickCustomWallpaper,
+        colors = ButtonDefaults.buttonColors(containerColor = primaryColor),
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 44.dp)
+            .testTag("select_custom_wallpaper_btn")
+    ) {
+        Icon(Icons.Default.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(modifier = Modifier.width(6.dp))
+        com.example.ui.components.AutoResizeText(
+            text = "Select Custom Gallery Backdrop",
+            maxFontSize = 14.sp,
+            minFontSize = 11.sp,
+            color = Color.White,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+
+    Spacer(modifier = Modifier.height(10.dp))
+
+    // Horizontal quick-scroll strip
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("wallpaper_lazy_row")
+    ) {
+        items(allWallpapers) { wallpaper ->
+            val isSelected = wallpaper == currentWallpaper
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .width(76.dp)
+                    .clickable { onSelectWallpaper(wallpaper) }
+                    .testTag("wallpaper_option_${wallpaper.id.lowercase()}")
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(width = 72.dp, height = 96.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .border(
+                            width = if (isSelected) 2.5.dp else 1.dp,
+                            color = if (isSelected) primaryColor else Color.Gray.copy(alpha = 0.5f),
+                            shape = RoundedCornerShape(10.dp)
+                        )
+                ) {
+                    ChatWallpaperBackground(
+                        wallpaper = wallpaper,
+                        isDarkMode = isDarkMode,
+                        customWallpaperUri = customWallpaperUri,
+                        customWallpaperDimming = customWallpaperDimming,
+                        customWallpaperScale = customWallpaperScale
+                    ) {}
+
+                    if (isSelected) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(4.dp)
+                                .size(20.dp)
+                                .clip(CircleShape)
+                                .background(primaryColor),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "Selected",
+                                tint = Color.White,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = wallpaper.displayName,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                    color = if (isSelected) primaryColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+    }
+
+    Spacer(modifier = Modifier.height(12.dp))
+
+    // Full multi-row grid of all old & new wallpapers for easy vertical browsing
+    Text(
+        text = "All Wallpapers",
+        fontWeight = FontWeight.Medium,
+        fontSize = 12.sp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Spacer(modifier = Modifier.height(6.dp))
+
+    allWallpapers.chunked(3).forEach { rowItems ->
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            rowItems.forEach { wallpaper ->
+                val isSelected = wallpaper == currentWallpaper
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { onSelectWallpaper(wallpaper) }
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(84.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .border(
+                                width = if (isSelected) 2.5.dp else 1.dp,
+                                color = if (isSelected) primaryColor else Color.Gray.copy(alpha = 0.4f),
+                                shape = RoundedCornerShape(10.dp)
+                            )
+                    ) {
+                        ChatWallpaperBackground(
+                            wallpaper = wallpaper,
+                            isDarkMode = isDarkMode,
+                            customWallpaperUri = customWallpaperUri,
+                            customWallpaperDimming = customWallpaperDimming,
+                            customWallpaperScale = customWallpaperScale
+                        ) {}
+
+                        if (isSelected) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(4.dp)
+                                    .size(18.dp)
+                                    .clip(CircleShape)
+                                    .background(primaryColor),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = "Selected",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        text = wallpaper.displayName,
+                        fontSize = 10.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                        color = if (isSelected) primaryColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+            repeat(3 - rowItems.size) {
+                Spacer(modifier = Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
 private fun ChatsSettingsDialog(
     currentWallpaper: ChatWallpaper,
     customWallpaperUri: String?,
@@ -1161,46 +1372,16 @@ private fun ChatsSettingsDialog(
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(12.dp))
 
-                Text("Chat Wallpaper", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Button(
-                    onClick = onPickCustomWallpaper,
-                    colors = ButtonDefaults.buttonColors(containerColor = primaryColor),
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Default.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Select Custom Gallery Backdrop")
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(ChatWallpaper.values().filter { it != ChatWallpaper.CUSTOM }) { wallpaper ->
-                        val isSelected = wallpaper == currentWallpaper
-                        Box(
-                            modifier = Modifier
-                                .size(width = 60.dp, height = 80.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .border(
-                                    width = if (isSelected) 2.dp else 1.dp,
-                                    color = if (isSelected) primaryColor else Color.Gray,
-                                    shape = RoundedCornerShape(8.dp)
-                                )
-                                .clickable { onSelectWallpaper(wallpaper) }
-                        ) {
-                            ChatWallpaperBackground(
-                                wallpaper = wallpaper,
-                                isDarkMode = isDarkMode,
-                                customWallpaperUri = customWallpaperUri,
-                                customWallpaperDimming = customWallpaperDimming,
-                                customWallpaperScale = customWallpaperScale
-                            ) {}
-                        }
-                    }
-                }
+                WallpaperSelectionSection(
+                    currentWallpaper = currentWallpaper,
+                    customWallpaperUri = customWallpaperUri,
+                    customWallpaperDimming = customWallpaperDimming,
+                    customWallpaperScale = customWallpaperScale,
+                    isDarkMode = isDarkMode,
+                    primaryColor = primaryColor,
+                    onSelectWallpaper = onSelectWallpaper,
+                    onPickCustomWallpaper = onPickCustomWallpaper
+                )
 
                 Spacer(modifier = Modifier.height(12.dp))
                 HorizontalDivider()
@@ -1226,8 +1407,14 @@ private fun ChatsSettingsDialog(
 private fun AppearanceSettingsDialog(
     isDarkMode: Boolean,
     currentPalette: AppThemePalette,
+    currentWallpaper: ChatWallpaper,
+    customWallpaperUri: String?,
+    customWallpaperDimming: Float,
+    customWallpaperScale: String,
     onToggleDarkMode: () -> Unit,
     onSelectPalette: (AppThemePalette) -> Unit,
+    onSelectWallpaper: (ChatWallpaper) -> Unit,
+    onPickCustomWallpaper: () -> Unit,
     onDismiss: () -> Unit
 ) {
     AlertDialog(
@@ -1272,6 +1459,21 @@ private fun AppearanceSettingsDialog(
                         }
                     }
                 }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(12.dp))
+
+                WallpaperSelectionSection(
+                    currentWallpaper = currentWallpaper,
+                    customWallpaperUri = customWallpaperUri,
+                    customWallpaperDimming = customWallpaperDimming,
+                    customWallpaperScale = customWallpaperScale,
+                    isDarkMode = isDarkMode,
+                    primaryColor = currentPalette.primaryColor,
+                    onSelectWallpaper = onSelectWallpaper,
+                    onPickCustomWallpaper = onPickCustomWallpaper
+                )
             }
         },
         confirmButton = {
@@ -1309,12 +1511,24 @@ private fun BroadcastsSettingsDialog(primaryColor: Color, onDismiss: () -> Unit)
 @Composable
 private fun NotificationsSettingsDialog(
     primaryColor: Color,
+    fcmToken: String,
+    onRefreshFcmToken: () -> Unit,
     onTriggerMessageNotification: () -> Unit,
     onTriggerCallNotification: (isVideo: Boolean) -> Unit,
     onTriggerFriendRequestNotification: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+
+    var messagesEnabled by remember {
+        mutableStateOf(com.example.notification.NotificationHelper.isMessagesEnabled(context))
+    }
+    var friendRequestsEnabled by remember {
+        mutableStateOf(com.example.notification.NotificationHelper.isFriendRequestsEnabled(context))
+    }
+    var callsEnabled by remember {
+        mutableStateOf(com.example.notification.NotificationHelper.isCallsEnabled(context))
+    }
 
     var selectedDmProfile by remember {
         mutableStateOf(com.example.notification.NotificationHelper.getDirectMessageSoundProfile(context))
@@ -1328,9 +1542,121 @@ private fun NotificationsSettingsDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Notification Tones & Push Alerts", fontWeight = FontWeight.Bold) },
+        title = { Text("FCM Push Notifications & Alerts", fontWeight = FontWeight.Bold) },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                // FIREBASE CLOUD MESSAGING (FCM) STATUS CARD
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = primaryColor.copy(alpha = 0.12f)),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Firebase Cloud Messaging (FCM)",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                    color = primaryColor
+                                )
+                                Text(
+                                    text = "Status: Connected • Actionable Push Channels Active",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            TextButton(
+                                onClick = onRefreshFcmToken,
+                                modifier = Modifier.testTag("refresh_fcm_token_btn")
+                            ) {
+                                Text("Sync", fontSize = 12.sp, color = primaryColor, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Device Token: ${fcmToken.take(28)}${if (fcmToken.length > 28) "..." else ""}",
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // CATEGORY TOGGLES
+                Text("Push Notification Categories", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("New Messages", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        Text("Direct & group message alerts with inline reply", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(
+                        checked = messagesEnabled,
+                        onCheckedChange = {
+                            messagesEnabled = it
+                            com.example.notification.NotificationHelper.setMessagesEnabled(context, it)
+                        },
+                        colors = SwitchDefaults.colors(checkedThumbColor = primaryColor),
+                        modifier = Modifier.testTag("toggle_notif_messages")
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Friend Requests", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        Text("Connection invites with Accept & Decline actions", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(
+                        checked = friendRequestsEnabled,
+                        onCheckedChange = {
+                            friendRequestsEnabled = it
+                            com.example.notification.NotificationHelper.setFriendRequestsEnabled(context, it)
+                        },
+                        colors = SwitchDefaults.colors(checkedThumbColor = primaryColor),
+                        modifier = Modifier.testTag("toggle_notif_friends")
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Incoming Calls", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        Text("High-priority voice & video calls with Answer/Decline", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(
+                        checked = callsEnabled,
+                        onCheckedChange = {
+                            callsEnabled = it
+                            com.example.notification.NotificationHelper.setCallsEnabled(context, it)
+                        },
+                        colors = SwitchDefaults.colors(checkedThumbColor = primaryColor),
+                        modifier = Modifier.testTag("toggle_notif_calls")
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(12.dp))
+
                 // SOUND PROFILES SECTION
                 Text("Message Sound Profiles", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 Spacer(modifier = Modifier.height(4.dp))
@@ -1472,42 +1798,47 @@ private fun NotificationsSettingsDialog(
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(16.dp))
 
-                Text("Live Immediate Triggers", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Text("Actionable FCM Push Triggers", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Test actionable notifications for new messages (tap to open chat or inline reply), friend requests (Accept/Decline), and incoming calls (Answer/Decline).",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
-                        onClick = {
-                            com.example.notification.NotificationHelper.showNewMessageNotification(
-                                context = context,
-                                chatId = "dm_101",
-                                senderName = "Elena Vance",
-                                messageText = "Hey! Direct message alert with tone: ${selectedDmProfile.title}",
-                                isGroup = false
-                            )
-                        },
+                        onClick = onTriggerMessageNotification,
                         colors = ButtonDefaults.buttonColors(containerColor = primaryColor),
                         shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("trigger_dm_notif_btn")
                     ) {
-                        Text("DM Alert", fontSize = 12.sp)
+                        Text("New Message", fontSize = 12.sp)
                     }
 
                     Button(
                         onClick = {
-                            com.example.notification.NotificationHelper.showNewMessageNotification(
+                            com.example.notification.LinkoFirebaseMessagingService.dispatchRemotePayload(
                                 context = context,
-                                chatId = "group_101",
-                                senderName = "Design Team (Marcus)",
-                                messageText = "Group chat alert with tone: ${selectedGroupProfile.title}",
-                                isGroup = true
+                                data = mapOf(
+                                    "type" to "group_message",
+                                    "chat_id" to "group_design_team",
+                                    "sender_name" to "Design Team (Marcus)",
+                                    "message_text" to "Group chat alert with tone: ${selectedGroupProfile.title}",
+                                    "is_group" to "true"
+                                )
                             )
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = primaryColor),
                         shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("trigger_group_notif_btn")
                     ) {
-                        Text("Group Alert", fontSize = 12.sp)
+                        Text("Group Message", fontSize = 12.sp)
                     }
                 }
 
@@ -1516,7 +1847,9 @@ private fun NotificationsSettingsDialog(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
                         onClick = { onTriggerCallNotification(false) },
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("trigger_voice_call_notif_btn")
                     ) {
                         Icon(Icons.Default.Call, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
@@ -1525,7 +1858,9 @@ private fun NotificationsSettingsDialog(
 
                     OutlinedButton(
                         onClick = { onTriggerCallNotification(true) },
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("trigger_video_call_notif_btn")
                     ) {
                         Icon(Icons.Default.Call, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
@@ -1539,19 +1874,21 @@ private fun NotificationsSettingsDialog(
                     onClick = onTriggerFriendRequestNotification,
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                     shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("trigger_friend_request_notif_btn")
                 ) {
-                    Text("Trigger Friend Request Alert", color = primaryColor)
+                    Text("Trigger Friend Request Push", color = primaryColor, fontWeight = FontWeight.SemiBold)
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(16.dp))
 
-                Text("Background / Offline Push Tests (5s Delay)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Text("Background / Lock-Screen FCM Push (5s Delay)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Tap a button below, then minimize Linko or lock your device. A push notification will arrive in 5 seconds to test background receipt.",
+                    text = "Tap a button below, then minimize Linko or lock your device. A push notification will arrive in 5 seconds to test background delivery.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

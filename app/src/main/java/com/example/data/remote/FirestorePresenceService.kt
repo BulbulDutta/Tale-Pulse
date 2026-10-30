@@ -12,24 +12,26 @@ object FirestorePresenceService {
     private const val COLLECTION_PRESENCE = "user_presence"
 
     private fun getFirestore(): FirebaseFirestore? {
-        return try {
-            FirebaseFirestore.getInstance()
-        } catch (_: Throwable) {
-            null
-        }
+        return FirestoreProvider.getInstance()
     }
 
     private var activePresenceListener: ListenerRegistration? = null
 
     fun updatePresence(email: String, userId: String, isOnline: Boolean) {
+        if (!FirestoreProvider.isAuthenticated()) {
+            Log.d(TAG, "Skipping presence update because FirebaseAuth is not authenticated")
+            return
+        }
         val db = getFirestore() ?: return
         val normalizedEmail = email.lowercase().trim()
         if (normalizedEmail.isBlank()) return
 
         try {
+            val path = "$COLLECTION_PRESENCE/$normalizedEmail"
             val data = mapOf(
                 "email" to normalizedEmail,
                 "userId" to userId,
+                "online" to isOnline,
                 "isOnline" to isOnline,
                 "lastSeen" to System.currentTimeMillis()
             )
@@ -40,6 +42,7 @@ object FirestorePresenceService {
                     Log.d(TAG, "Presence updated for $normalizedEmail: isOnline=$isOnline")
                 }
                 .addOnFailureListener { e ->
+                    handleFirestoreError(e, OperationType.WRITE, path)
                     Log.w(TAG, "Failed updating presence for $normalizedEmail: ${e.message}")
                 }
         } catch (e: Exception) {
@@ -52,13 +55,20 @@ object FirestorePresenceService {
         onPresenceUpdate: (Set<String>) -> Unit
     ) {
         activePresenceListener?.remove()
+        activePresenceListener = null
+
+        if (!FirestoreProvider.isAuthenticated()) {
+            Log.d(TAG, "Skipping presence listener because FirebaseAuth is not authenticated")
+            return
+        }
         val db = getFirestore() ?: return
 
         try {
             activePresenceListener = db.collection(COLLECTION_PRESENCE)
                 .addSnapshotListener { snapshot, error ->
                     if (error != null) {
-                        Log.e(TAG, "Presence listener error: ${error.message}")
+                        handleFirestoreError(error, OperationType.LIST, COLLECTION_PRESENCE)
+                        Log.w(TAG, "Presence listener error: ${error.message}")
                         return@addSnapshotListener
                     }
 
@@ -71,7 +81,9 @@ object FirestorePresenceService {
                         val now = System.currentTimeMillis()
                         for (doc in snapshot.documents) {
                             val email = doc.getString("email")?.lowercase()?.trim() ?: continue
-                            val isOnline = doc.getBoolean("isOnline") ?: false
+                            val isOnline = doc.getBoolean("isOnline")
+                                ?: doc.getBoolean("online")
+                                ?: false
                             val lastSeen = doc.getLong("lastSeen") ?: 0L
 
                             // Online ONLY if isOnline is true and lastSeen within last 5 minutes

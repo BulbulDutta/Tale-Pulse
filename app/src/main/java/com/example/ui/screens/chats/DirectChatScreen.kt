@@ -15,6 +15,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,6 +28,7 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -61,16 +64,22 @@ import androidx.compose.material.icons.filled.FormatBold
 import androidx.compose.material.icons.filled.FormatItalic
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -90,6 +99,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -98,8 +108,11 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
@@ -113,6 +126,7 @@ import androidx.compose.ui.unit.sp
 import com.example.data.local.entity.ChatEntity
 import com.example.data.local.entity.ContactEntity
 import com.example.data.local.entity.MessageEntity
+import com.example.data.local.entity.MessageStatus
 import com.example.data.local.entity.UserEntity
 import com.example.data.model.CallType
 import com.example.data.model.EmailHeaderInfo
@@ -129,6 +143,7 @@ import com.example.ui.components.EventCreationDialog
 import com.example.ui.components.ImagePreviewDialog
 import com.example.ui.components.LocationPickerDialog
 import com.example.ui.components.MessageReactionsBar
+import com.example.ui.components.MessageStatusTicks
 import com.example.ui.components.PollCreationDialog
 import com.example.ui.components.RecipientProfileSheet
 import com.example.ui.components.UserAvatar
@@ -143,8 +158,10 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.text.style.TextAlign
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -167,6 +184,7 @@ fun DirectChatScreen(
     onBackClick: () -> Unit,
     onSendMessage: (text: String, mediaUri: String?, mediaType: String?, richFormat: String?) -> Unit,
     onMarkAsRead: (chatId: String) -> Unit = {},
+    onMarkVisibleMessagesAsRead: (chatId: String, visibleMessageIds: List<String>) -> Unit = { _, _ -> },
     onToggleReaction: (messageId: String, emoji: String) -> Unit = { _, _ -> },
     onDeleteForMe: (messageId: String) -> Unit = {},
     onDeleteForEveryone: (messageId: String) -> Unit = {},
@@ -191,6 +209,7 @@ fun DirectChatScreen(
     var activeEmailHeader by remember { mutableStateOf<EmailHeaderInfo?>(null) }
     var showSecurityDialog by remember { mutableStateOf(false) }
     var showProfileSheet by remember { mutableStateOf(false) }
+    var showInviteContactsDialog by remember { mutableStateOf(false) }
 
     val recipientContact = remember(chat, contacts, currentUser) {
         if (chat == null || chat.isGroup) null
@@ -257,7 +276,18 @@ fun DirectChatScreen(
     var customEmojiTargetMessageId by remember { mutableStateOf<String?>(null) }
 
     var isRecordingAudio by remember { mutableStateOf(false) }
+    var isHoldingMicButton by remember { mutableStateOf(false) }
+    var isRecordingLocked by remember { mutableStateOf(false) }
     var recordingSeconds by remember { mutableStateOf(0) }
+    var recordingDeciseconds by remember { mutableStateOf(0) }
+    var slideCancelOffsetX by remember { mutableStateOf(0f) }
+    var holdHintMessage by remember { mutableStateOf<String?>(null) }
+    val liveWaveformAmplitudes = remember {
+        mutableStateListOf(
+            0.25f, 0.35f, 0.50f, 0.30f, 0.65f, 0.45f, 0.70f, 0.40f,
+            0.55f, 0.30f, 0.60f, 0.35f, 0.45f, 0.25f, 0.50f, 0.35f
+        )
+    }
     var actionTargetMessage by remember { mutableStateOf<MessageEntity?>(null) }
     var messageInfoTarget by remember { mutableStateOf<MessageEntity?>(null) }
     var replyingToMessage by remember { mutableStateOf<MessageEntity?>(null) }
@@ -269,6 +299,15 @@ fun DirectChatScreen(
     val clipboardManager = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     val audioRecorderManager = remember { com.example.util.AudioRecorderManager(context) }
+
+    // Ensure recorder is cleaned up if user leaves the chat screen while recording
+    DisposableEffect(Unit) {
+        onDispose {
+            if (isRecordingAudio) {
+                audioRecorderManager.cancelRecording()
+            }
+        }
+    }
 
     // Activity Result Launchers
     val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
@@ -320,12 +359,78 @@ fun DirectChatScreen(
         }
     }
 
+    val audioPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+        if (isGranted) {
+            holdHintMessage = "Microphone enabled — Hold the mic button to record & release to send"
+        } else {
+            Toast.makeText(context, "Microphone permission is required to record voice notes", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val finishAndSendVoiceNote: () -> Unit = {
+        val result = audioRecorderManager.stopRecordingWithMetadata()
+        isRecordingAudio = false
+        isHoldingMicButton = false
+        isRecordingLocked = false
+        slideCancelOffsetX = 0f
+        recordingSeconds = 0
+        recordingDeciseconds = 0
+        if (result != null) {
+            val replyPrefix = if (replyingToMessage != null) {
+                val rMsg = replyingToMessage!!
+                val textSnippet = rMsg.text.ifBlank { rMsg.mediaType ?: "Media" }
+                "REPLY:${rMsg.senderName}|$textSnippet"
+            } else null
+            replyingToMessage = null
+
+            scope.launch {
+                val savedUri = ImageStorageHelper.saveUriToInternalStorage(context, Uri.fromFile(result.file))
+                val audioUri = savedUri?.toString() ?: Uri.fromFile(result.file).toString()
+                onSendMessage(
+                    "🎙️ Voice Note (${result.durationFormatted})",
+                    audioUri,
+                    "AUDIO",
+                    replyPrefix
+                )
+            }
+        }
+    }
+
+    val cancelActiveVoiceNote: (Boolean) -> Unit = { showToast ->
+        audioRecorderManager.cancelRecording()
+        isRecordingAudio = false
+        isHoldingMicButton = false
+        isRecordingLocked = false
+        slideCancelOffsetX = 0f
+        recordingSeconds = 0
+        recordingDeciseconds = 0
+        if (showToast) {
+            holdHintMessage = "Voice note recording cancelled"
+        }
+    }
+
+    LaunchedEffect(holdHintMessage) {
+        if (holdHintMessage != null) {
+            delay(2800)
+            holdHintMessage = null
+        }
+    }
+
     LaunchedEffect(isRecordingAudio) {
         if (isRecordingAudio) {
             recordingSeconds = 0
+            recordingDeciseconds = 0
+            var tickCount = 0
             while (isRecordingAudio) {
-                delay(1000)
-                recordingSeconds++
+                delay(100)
+                tickCount++
+                recordingDeciseconds = tickCount % 10
+                recordingSeconds = tickCount / 10
+                val amp = audioRecorderManager.sampleNormalizedAmplitude()
+                if (liveWaveformAmplitudes.size >= 18) {
+                    liveWaveformAmplitudes.removeAt(0)
+                }
+                liveWaveformAmplitudes.add(amp)
             }
         }
     }
@@ -333,11 +438,14 @@ fun DirectChatScreen(
     val listState = rememberLazyListState()
 
     val lifecycleOwner = LocalLifecycleOwner.current
+    var isScreenResumed by remember { mutableStateOf(true) }
 
-    DisposableEffect(lifecycleOwner, chat?.id) {
+    DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                chat?.id?.let { id -> onMarkAsRead(id) }
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> isScreenResumed = true
+                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> isScreenResumed = false
+                else -> {}
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -346,13 +454,33 @@ fun DirectChatScreen(
         }
     }
 
-    LaunchedEffect(chat?.id, messages) {
-        chat?.id?.let { id ->
-            val hasUnreadFromOthers = messages.any { it.senderId != currentUser?.id && it.status != "READ" }
-            if (hasUnreadFromOthers) {
-                onMarkAsRead(id)
-            }
+    // Trigger Stage 3 ('read' - Double Blue Tick) ONLY when recipient has opened the chat
+    // and the incoming message is actually visible on their screen.
+    LaunchedEffect(chat?.id, messages, isScreenResumed, currentUser?.id) {
+        val activeChatId = chat?.id ?: return@LaunchedEffect
+        if (!isScreenResumed) return@LaunchedEffect
+
+        snapshotFlow {
+            listState.layoutInfo.visibleItemsInfo.mapNotNull { it.key as? String }.toSet()
         }
+            .distinctUntilChanged()
+            .collect { visibleItemKeys ->
+                if (visibleItemKeys.isEmpty()) return@collect
+                val myId = currentUser?.id ?: ""
+                val myEmail = currentUser?.email?.lowercase()?.trim() ?: ""
+
+                val visibleUnreadIds = messages.filter { msg ->
+                    val isVisibleOnScreen = msg.id in visibleItemKeys
+                    val isFromRecipient = (myId.isNotBlank() && msg.senderId != myId) ||
+                            (myEmail.isNotBlank() && msg.senderEmail.lowercase().trim() != myEmail)
+                    val isNotYetRead = MessageStatus.normalize(msg.status) != MessageStatus.READ
+                    isVisibleOnScreen && isFromRecipient && isNotYetRead
+                }.map { it.id }
+
+                if (visibleUnreadIds.isNotEmpty()) {
+                    onMarkVisibleMessagesAsRead(activeChatId, visibleUnreadIds)
+                }
+            }
     }
 
     val imeBottom = WindowInsets.ime.asPaddingValues().calculateBottomPadding()
@@ -525,6 +653,123 @@ fun DirectChatScreen(
         )
     }
 
+    if (showInviteContactsDialog && chat?.isGroup == true) {
+        val currentParticipants = remember(chat.participantIdsJson) {
+            try {
+                if (chat.participantIdsJson.isBlank()) emptyList()
+                else {
+                    val arr = org.json.JSONArray(chat.participantIdsJson)
+                    (0 until arr.length()).map { arr.getString(it) }
+                }
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
+        val availableContacts = remember(contacts, currentParticipants) {
+            contacts.filter { it.contactUserId !in currentParticipants }
+        }
+        val selectedInviteContacts = remember { mutableStateListOf<ContactEntity>() }
+        val isChannel = chat.id.startsWith("channel_")
+
+        AlertDialog(
+            onDismissRequest = { showInviteContactsDialog = false },
+            title = {
+                Text(
+                    text = if (isChannel) "Invite Contacts to Channel" else "Invite Contacts to Group",
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                if (availableContacts.isEmpty()) {
+                    Text("All your saved contacts are already members of \"${chat.name}\".")
+                } else {
+                    Column(
+                        modifier = Modifier.verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "Select one or more contacts to invite to \"${chat.name}\":",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        availableContacts.forEach { contact ->
+                            val isChecked = selectedInviteContacts.any { it.id == contact.id }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable {
+                                        if (isChecked) selectedInviteContacts.removeAll { it.id == contact.id }
+                                        else selectedInviteContacts.add(contact)
+                                    }
+                                    .padding(vertical = 6.dp, horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = isChecked,
+                                    onCheckedChange = { checked ->
+                                        if (checked) {
+                                            if (selectedInviteContacts.none { it.id == contact.id }) {
+                                                selectedInviteContacts.add(contact)
+                                            }
+                                        } else {
+                                            selectedInviteContacts.removeAll { it.id == contact.id }
+                                        }
+                                    },
+                                    colors = CheckboxDefaults.colors(checkedColor = Emerald500)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                UserAvatar(
+                                    name = contact.contactDisplayName,
+                                    avatarUri = contact.contactAvatarUri,
+                                    size = 36.dp
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = contact.contactDisplayName,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 14.sp
+                                    )
+                                    Text(
+                                        text = contact.contactEmail,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                if (availableContacts.isNotEmpty()) {
+                    Button(
+                        onClick = {
+                            onAddGroupMembers(chat.id, selectedInviteContacts.toList())
+                            showInviteContactsDialog = false
+                            Toast.makeText(
+                                context,
+                                "Invited ${selectedInviteContacts.size} contact(s) to ${chat.name}",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        },
+                        enabled = selectedInviteContacts.isNotEmpty(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Emerald500),
+                        modifier = Modifier.testTag("confirm_group_invite_button")
+                    ) {
+                        Text("Invite (${selectedInviteContacts.size})", color = Color.White)
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showInviteContactsDialog = false }) {
+                    Text("Close")
+                }
+            }
+        )
+    }
+
     ChatWallpaperBackground(
         wallpaper = chatWallpaper,
         isDarkMode = isDarkMode,
@@ -583,10 +828,27 @@ fun DirectChatScreen(
                                         modifier = Modifier.size(11.dp)
                                     )
                                     Spacer(modifier = Modifier.width(3.dp))
-                                    Text(
-                                        text = if (isGeminiChat) "Gemini AI • E2EE" else if (chat?.isGroup == true) "Group • E2EE" else if (isChatUserOnline) "Online • E2EE" else "Offline • E2EE",
+                                    val groupMemberCount = remember(chat?.participantIdsJson) {
+                                        try {
+                                            if (chat?.participantIdsJson.isNullOrBlank()) 1
+                                            else org.json.JSONArray(chat?.participantIdsJson).length().coerceAtLeast(1)
+                                        } catch (_: Exception) {
+                                            1
+                                        }
+                                    }
+                                    val isBroadcastChannel = chat?.id?.startsWith("channel_") == true
+                                     Text(
+                                        text = when {
+                                            isGeminiChat -> "Gemini AI • E2EE"
+                                            chat?.isGroup == true && isBroadcastChannel -> "Channel • $groupMemberCount members • E2EE"
+                                            chat?.isGroup == true -> "Group • $groupMemberCount members • E2EE"
+                                            isChatUserOnline -> "Online • E2EE"
+                                            else -> "Offline • E2EE"
+                                        },
                                         fontSize = 11.sp,
-                                        color = if (isGeminiChat) Color(0xFF7C4DFF) else if (isChatUserOnline) Emerald500 else MaterialTheme.colorScheme.onSurfaceVariant
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        color = if (isGeminiChat) Color(0xFF7C4DFF) else if (isChatUserOnline || chat?.isGroup == true) Emerald500 else MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
@@ -601,6 +863,18 @@ fun DirectChatScreen(
                         }
                     },
                     actions = {
+                        if (chat?.isGroup == true) {
+                            IconButton(
+                                onClick = { showInviteContactsDialog = true },
+                                modifier = Modifier.testTag("group_invite_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PersonAdd,
+                                    contentDescription = "Invite Contacts to Group",
+                                    tint = Emerald500
+                                )
+                            }
+                        }
                         if (!isAiBot) {
                             val peerEmail = "${(chat?.name ?: "contact").lowercase().replace(" ", ".")}@linko.net"
                             IconButton(onClick = {
@@ -744,72 +1018,177 @@ fun DirectChatScreen(
                         }
                     }
 
-                    if (isRecordingAudio) {
-                        Card(
+                    // Floating Hold-to-Record Tooltip Hint
+                    AnimatedVisibility(visible = holdHintMessage != null) {
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.92f),
+                            shadowElevation = 4.dp,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 4.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+                                .padding(bottom = 6.dp)
+                                .testTag("voice_record_hint_banner")
                         ) {
                             Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
                                     Icon(
                                         imageVector = Icons.Default.Mic,
-                                        contentDescription = "Recording",
-                                        tint = MaterialTheme.colorScheme.error
+                                        contentDescription = null,
+                                        tint = Emerald500,
+                                        modifier = Modifier.size(16.dp)
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    val durationText = formatSeconds(recordingSeconds)
                                     Text(
-                                        text = "Recording Voice Note... $durationText",
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onErrorContainer
+                                        text = holdHintMessage ?: "",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.inverseOnSurface
                                     )
                                 }
-                                 Row {
-                                    IconButton(
-                                        onClick = {
-                                            audioRecorderManager.stopRecording()
-                                            isRecordingAudio = false
-                                            recordingSeconds = 0
-                                        }
-                                    ) {
-                                        Icon(Icons.Default.Close, contentDescription = "Cancel", tint = MaterialTheme.colorScheme.error)
-                                    }
-                                    IconButton(
-                                        onClick = {
-                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                            val recordedFile = audioRecorderManager.stopRecording()
-                                            isRecordingAudio = false
-                                            val durationText = formatSeconds(recordingSeconds)
-                                            if (recordedFile != null) {
-                                                scope.launch {
-                                                    val savedUri = ImageStorageHelper.saveUriToInternalStorage(context, Uri.fromFile(recordedFile))
-                                                    val audioUri = savedUri?.toString() ?: Uri.fromFile(recordedFile).toString()
-                                                    onSendMessage("🎙️ Voice Note ($durationText)", audioUri, "AUDIO", null)
-                                                }
-                                            }
-                                            recordingSeconds = 0
-                                        },
-                                        colors = IconButtonDefaults.iconButtonColors(containerColor = Emerald500)
-                                    ) {
-                                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send Voice Note", tint = Color.White)
-                                    }
+                                IconButton(
+                                    onClick = { holdHintMessage = null },
+                                    modifier = Modifier.size(20.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Dismiss Hint",
+                                        tint = MaterialTheme.colorScheme.inverseOnSurface,
+                                        modifier = Modifier.size(14.dp)
+                                    )
                                 }
                             }
                         }
-                    } else {
-                        // Ultra-slim single-row WhatsApp/Instagram style chat input bar
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                    }
+
+                    // Single-row WhatsApp/Signal style chat input bar with persistent Hold-to-Record Mic button
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (isRecordingAudio) {
+                            // Live Voice Note Recording Bar (active during Hold-to-Record or Locked mode)
+                            Surface(
+                                shape = RoundedCornerShape(24.dp),
+                                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.95f),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.35f)),
+                                shadowElevation = 2.dp,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("active_voice_recording_bar")
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    // Pulsing Mic + Timer
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(10.dp)
+                                                .clip(CircleShape)
+                                                .background(
+                                                    if (recordingDeciseconds % 2 == 0) MaterialTheme.colorScheme.error
+                                                    else MaterialTheme.colorScheme.error.copy(alpha = 0.35f)
+                                                )
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        val durationText = "${formatSeconds(recordingSeconds)}.$recordingDeciseconds"
+                                        Text(
+                                            text = durationText,
+                                            fontSize = 14.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onErrorContainer,
+                                            modifier = Modifier.testTag("voice_recording_timer")
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.width(8.dp))
+
+                                    // Live Microphone Amplitude Waveform Bars
+                                    Row(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(24.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        liveWaveformAmplitudes.forEach { amp ->
+                                            val barH = (4.dp + (18.dp * amp.coerceIn(0.15f, 1.0f)))
+                                            Box(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .height(barH)
+                                                    .clip(RoundedCornerShape(2.dp))
+                                                    .background(MaterialTheme.colorScheme.error)
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.width(8.dp))
+
+                                    if (isRecordingLocked) {
+                                        // Hands-free Locked Controls: Cancel or Send
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            IconButton(
+                                                onClick = {
+                                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                    cancelActiveVoiceNote(true)
+                                                },
+                                                modifier = Modifier
+                                                    .size(34.dp)
+                                                    .testTag("cancel_voice_note_button")
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Delete,
+                                                    contentDescription = "Cancel Voice Note",
+                                                    tint = MaterialTheme.colorScheme.error,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            IconButton(
+                                                onClick = {
+                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                    finishAndSendVoiceNote()
+                                                },
+                                                colors = IconButtonDefaults.iconButtonColors(containerColor = Emerald500),
+                                                modifier = Modifier
+                                                    .size(34.dp)
+                                                    .testTag("send_locked_voice_note_button")
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.AutoMirrored.Filled.Send,
+                                                    contentDescription = "Send Voice Note",
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        // Hold-to-Record instruction: Slide left to cancel / Release to send
+                                        Text(
+                                            text = if (slideCancelOffsetX < -40f) "◀ Keep sliding to cancel" else "◀ Slide to cancel • Release to send",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
                             Surface(
                                 shape = RoundedCornerShape(24.dp),
                                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.88f),
@@ -884,57 +1263,186 @@ fun DirectChatScreen(
                                             .padding(horizontal = 2.dp)
                                     )
 
-                                    // Voice / Microphone icon tightly integrated inside the bar
+                                    // Google Maps Share Location quick action button
                                     IconButton(
                                         onClick = {
                                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                            audioRecorderManager.startRecording()
-                                            isRecordingAudio = true
+                                            showLocationDialog = true
                                         },
-                                        modifier = Modifier.size(32.dp)
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .testTag("quick_share_location_button")
                                     ) {
                                         Icon(
-                                            imageVector = Icons.Default.Mic,
-                                            contentDescription = "Voice Record",
-                                            tint = if (inputText.isBlank()) Emerald500 else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            imageVector = Icons.Default.LocationOn,
+                                            contentDescription = "Share Google Maps Location",
+                                            tint = Emerald500,
                                             modifier = Modifier.size(20.dp)
                                         )
                                     }
                                 }
                             }
+                        }
 
-                            // Immediate Send action button when text is entered
-                            if (inputText.isNotBlank()) {
-                                Spacer(modifier = Modifier.width(6.dp))
-                                IconButton(
-                                    onClick = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                        val replyPrefix = if (replyingToMessage != null) {
-                                            val rMsg = replyingToMessage!!
-                                            val textSnippet = rMsg.text.ifBlank { rMsg.mediaType ?: "Media" }
-                                            "REPLY:${rMsg.senderName}|$textSnippet"
-                                        } else null
-                                        val finalStyle = if (replyPrefix != null) {
-                                            if (selectedRichStyle != null) "$replyPrefix;$selectedRichStyle" else replyPrefix
-                                        } else selectedRichStyle
+                        Spacer(modifier = Modifier.width(6.dp))
 
-                                        onSendMessage(inputText.trim(), null, null, finalStyle)
-                                        inputText = ""
-                                        selectedRichStyle = null
-                                        replyingToMessage = null
-                                    },
-                                    colors = IconButtonDefaults.iconButtonColors(
-                                        containerColor = if (isGeminiChat) Color(0xFF7C4DFF) else Emerald500
-                                    ),
-                                    modifier = Modifier.size(40.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Filled.Send,
-                                        contentDescription = "Send",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(18.dp)
+                        // Right Primary Action Button:
+                        // - Shows Send Text button when inputText is non-blank and not currently recording audio
+                        // - Shows Hold-to-Record Microphone Button when inputText is blank (or while actively holding/recording)
+                        if (inputText.isNotBlank() && !isRecordingAudio) {
+                            IconButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    val replyPrefix = if (replyingToMessage != null) {
+                                        val rMsg = replyingToMessage!!
+                                        val textSnippet = rMsg.text.ifBlank { rMsg.mediaType ?: "Media" }
+                                        "REPLY:${rMsg.senderName}|$textSnippet"
+                                    } else null
+                                    val finalStyle = if (replyPrefix != null) {
+                                        if (selectedRichStyle != null) "$replyPrefix;$selectedRichStyle" else replyPrefix
+                                    } else selectedRichStyle
+
+                                    onSendMessage(inputText.trim(), null, null, finalStyle)
+                                    inputText = ""
+                                    selectedRichStyle = null
+                                    replyingToMessage = null
+                                },
+                                colors = IconButtonDefaults.iconButtonColors(
+                                    containerColor = if (isGeminiChat) Color(0xFF7C4DFF) else Emerald500
+                                ),
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .testTag("send_message_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.Send,
+                                    contentDescription = "Send",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        } else {
+                            // Hold-to-Record Microphone Button (48.dp touch target)
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .scale(if (isHoldingMicButton) 1.16f else 1.0f)
+                                    .clip(CircleShape)
+                                    .background(
+                                        when {
+                                            isHoldingMicButton -> MaterialTheme.colorScheme.error
+                                            isRecordingLocked -> Emerald500
+                                            isGeminiChat -> Color(0xFF7C4DFF)
+                                            else -> Emerald500
+                                        }
                                     )
-                                }
+                                    .pointerInput(Unit) {
+                                        awaitEachGesture {
+                                            val down = awaitFirstDown(requireUnconsumed = false)
+                                            down.consume()
+
+                                            // If already in locked hands-free mode, tapping the button finishes & sends
+                                            if (isRecordingAudio && isRecordingLocked) {
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                finishAndSendVoiceNote()
+                                                return@awaitEachGesture
+                                            }
+
+                                            // Verify RECORD_AUDIO runtime permission
+                                            val hasMicPermission = ContextCompat.checkSelfPermission(
+                                                context,
+                                                Manifest.permission.RECORD_AUDIO
+                                            ) == PackageManager.PERMISSION_GRANTED
+
+                                            if (!hasMicPermission) {
+                                                audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                                return@awaitEachGesture
+                                            }
+
+                                            // Start Hold-to-Record immediately on press down
+                                            val pressStartTime = System.currentTimeMillis()
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            holdHintMessage = null
+                                            slideCancelOffsetX = 0f
+                                            isHoldingMicButton = true
+                                            isRecordingLocked = false
+                                            audioRecorderManager.startRecording()
+                                            isRecordingAudio = true
+
+                                            var dragTotalX = 0f
+                                            var dragTotalY = 0f
+                                            var cancelledBySlide = false
+                                            var lockedBySlideUp = false
+
+                                            while (true) {
+                                                val event = awaitPointerEvent()
+                                                val activeChange = event.changes.firstOrNull { it.id == down.id }
+                                                    ?: event.changes.firstOrNull()
+
+                                                if (activeChange == null || !activeChange.pressed) {
+                                                    break
+                                                }
+
+                                                val delta = activeChange.positionChange()
+                                                if (delta != androidx.compose.ui.geometry.Offset.Zero) {
+                                                    activeChange.consume()
+                                                    dragTotalX += delta.x
+                                                    dragTotalY += delta.y
+                                                    slideCancelOffsetX = dragTotalX.coerceAtMost(0f)
+
+                                                    // Slide left past threshold -> cancel voice note
+                                                    if (dragTotalX < -190f) {
+                                                        cancelledBySlide = true
+                                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                        cancelActiveVoiceNote(true)
+                                                        break
+                                                    }
+
+                                                    // Slide up past threshold -> lock hands-free recording
+                                                    if (dragTotalY < -140f) {
+                                                        lockedBySlideUp = true
+                                                        isRecordingLocked = true
+                                                        isHoldingMicButton = false
+                                                        slideCancelOffsetX = 0f
+                                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                        holdHintMessage = "Recording locked hands-free — Tap Send when finished"
+                                                        break
+                                                    }
+                                                }
+                                            }
+
+                                            // Pointer released
+                                            if (!cancelledBySlide && !lockedBySlideUp) {
+                                                val heldDurationMs = System.currentTimeMillis() - pressStartTime
+                                                isHoldingMicButton = false
+                                                slideCancelOffsetX = 0f
+                                                if (heldDurationMs >= 350L) {
+                                                    // Standard Hold-to-Record release -> immediately send voice note!
+                                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                    finishAndSendVoiceNote()
+                                                } else {
+                                                    // Quick tap (< 350ms) -> lock recording & show helpful Hold-to-Record hint
+                                                    isRecordingLocked = true
+                                                    holdHintMessage = "Hold mic & release to send instantly, or tap Send to finish"
+                                                }
+                                            }
+                                        }
+                                    }
+                                    .testTag("hold_to_record_audio_button")
+                            ) {
+                                Icon(
+                                    imageVector = if (isRecordingLocked) Icons.AutoMirrored.Filled.Send else Icons.Default.Mic,
+                                    contentDescription = if (isHoldingMicButton) {
+                                        "Recording Voice Note - Release to Send"
+                                    } else if (isRecordingLocked) {
+                                        "Send Locked Voice Note"
+                                    } else {
+                                        "Hold to Record Voice Note"
+                                    },
+                                    tint = Color.White,
+                                    modifier = Modifier.size(22.dp)
+                                )
                             }
                         }
                     }
@@ -951,7 +1459,7 @@ fun DirectChatScreen(
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(250.dp)
+                                .heightIn(min = 180.dp, max = 240.dp)
                                 .padding(top = 6.dp)
                         )
                     }
@@ -1294,6 +1802,83 @@ fun DirectChatScreen(
             dismissButton = {
                 TextButton(onClick = { actionTargetMessage = null }) {
                     Text("Close")
+                }
+            }
+        )
+    }
+
+    if (messageInfoTarget != null) {
+        val infoMsg = messageInfoTarget!!
+        val normalizedStatus = MessageStatus.normalize(infoMsg.status)
+        AlertDialog(
+            onDismissRequest = { messageInfoTarget = null },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    MessageStatusTicks(status = normalizedStatus, iconSize = 20.dp)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Message Delivery & Read Info", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = "Sent",
+                            tint = Color(0xFF9CA3AF),
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text("Sent to Server (Single Gray Tick)", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            Text(formatTime(infoMsg.timestamp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    HorizontalDivider()
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.DoneAll,
+                            contentDescription = "Delivered",
+                            tint = Color(0xFF9CA3AF),
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text("Delivered to Recipient (Double Gray Tick)", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            Text(
+                                text = if (infoMsg.deliveredAt != null) formatTime(infoMsg.deliveredAt)
+                                else if (normalizedStatus in listOf(MessageStatus.DELIVERED, MessageStatus.READ)) "Delivered"
+                                else "Pending recipient device connection",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    HorizontalDivider()
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.DoneAll,
+                            contentDescription = "Read",
+                            tint = StatusReadBlue,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text("Read by Recipient (Double Blue Tick)", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            Text(
+                                text = if (infoMsg.readAt != null) formatTime(infoMsg.readAt)
+                                else if (normalizedStatus == MessageStatus.READ) "Seen on screen"
+                                else "Not yet seen on recipient's screen",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { messageInfoTarget = null }) {
+                    Text("Done")
                 }
             }
         )

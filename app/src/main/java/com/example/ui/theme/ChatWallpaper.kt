@@ -1,6 +1,8 @@
 package com.example.ui.theme
 
+import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,16 +16,19 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.example.R
 
 enum class ChatWallpaper(
     val id: String,
     val displayName: String,
     val previewPrimaryColor: Color,
     val previewSecondaryColor: Color,
-    val isPattern: Boolean = false
+    val isPattern: Boolean = false,
+    @DrawableRes val drawableResId: Int? = null
 ) {
     DEFAULT(
         id = "DEFAULT",
@@ -37,6 +42,69 @@ enum class ChatWallpaper(
         previewPrimaryColor = Color(0xFF0F172A),
         previewSecondaryColor = Color(0xFF10B981),
         isPattern = true
+    ),
+    NEW_BG_1(
+        id = "NEW_BG_1",
+        displayName = "Rainbow Shards",
+        previewPrimaryColor = Color(0xFF1E3A8A),
+        previewSecondaryColor = Color(0xFFEC4899),
+        drawableResId = R.drawable.new_bg_1
+    ),
+    NEW_BG_2(
+        id = "NEW_BG_2",
+        displayName = "Color Bokeh",
+        previewPrimaryColor = Color(0xFFEF4444),
+        previewSecondaryColor = Color(0xFF9333EA),
+        drawableResId = R.drawable.new_bg_2
+    ),
+    NEW_BG_3(
+        id = "NEW_BG_3",
+        displayName = "Rainbow Mandala",
+        previewPrimaryColor = Color(0xFF0D9488),
+        previewSecondaryColor = Color(0xFFEAB308),
+        drawableResId = R.drawable.new_bg_3
+    ),
+    NEW_BG_4(
+        id = "NEW_BG_4",
+        displayName = "Silk Ribbons",
+        previewPrimaryColor = Color(0xFF2563EB),
+        previewSecondaryColor = Color(0xFFF59E0B),
+        drawableResId = R.drawable.new_bg_4
+    ),
+    NEW_BG_5(
+        id = "NEW_BG_5",
+        displayName = "Sparkle Hearts",
+        previewPrimaryColor = Color(0xFFF43F5E),
+        previewSecondaryColor = Color(0xFF38BDF8),
+        drawableResId = R.drawable.new_bg_5
+    ),
+    NEW_BG_6(
+        id = "NEW_BG_6",
+        displayName = "Neon Warp",
+        previewPrimaryColor = Color(0xFFBE185D),
+        previewSecondaryColor = Color(0xFF10B981),
+        drawableResId = R.drawable.new_bg_6
+    ),
+    NEW_BG_7(
+        id = "NEW_BG_7",
+        displayName = "Prism Streaks",
+        previewPrimaryColor = Color(0xFF6366F1),
+        previewSecondaryColor = Color(0xFFEC4899),
+        drawableResId = R.drawable.new_bg_7
+    ),
+    NEW_BG_8(
+        id = "NEW_BG_8",
+        displayName = "Golden Rays",
+        previewPrimaryColor = Color(0xFF0F172A),
+        previewSecondaryColor = Color(0xFFD97706),
+        drawableResId = R.drawable.new_bg_8
+    ),
+    NEW_BG_9(
+        id = "NEW_BG_9",
+        displayName = "Gold & Navy",
+        previewPrimaryColor = Color(0xFF0F2537),
+        previewSecondaryColor = Color(0xFFF59E0B),
+        drawableResId = R.drawable.new_bg_9
     ),
     CHARCOAL_DARK(
         id = "CHARCOAL_DARK",
@@ -87,7 +155,12 @@ enum class ChatWallpaper(
         previewPrimaryColor = Color(0xFF334155),
         previewSecondaryColor = Color(0xFF0EA5E9),
         isPattern = false
-    )
+    );
+
+    companion object {
+        val selectableWallpapers: List<ChatWallpaper>
+            get() = entries.filter { it != CUSTOM }
+    }
 }
 
 @Composable
@@ -101,7 +174,21 @@ fun ChatWallpaperBackground(
     content: @Composable () -> Unit
 ) {
     Box(modifier = modifier.fillMaxSize()) {
-        when (wallpaper) {
+        if (wallpaper.drawableResId != null) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                Image(
+                    painter = painterResource(id = wallpaper.drawableResId),
+                    contentDescription = wallpaper.displayName,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.15f))
+                )
+            }
+        } else when (wallpaper) {
             ChatWallpaper.CUSTOM -> {
                 if (!customWallpaperUri.isNullOrBlank()) {
                     val scale = when (customWallpaperScale) {
@@ -310,6 +397,7 @@ fun ChatWallpaperBackground(
                     }
                 }
             }
+            else -> {}
         }
         content()
     }

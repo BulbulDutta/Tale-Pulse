@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -133,7 +134,9 @@ fun ChatsScreen(
                     text = "Linko",
                     fontSize = 24.sp,
                     fontWeight = FontWeight.Bold,
-                    color = com.example.ui.theme.Emerald500
+                    color = com.example.ui.theme.Emerald500,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
@@ -165,7 +168,7 @@ fun ChatsScreen(
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(50.dp)
+                        .heightIn(min = 50.dp)
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))
@@ -278,13 +281,16 @@ fun ChatsScreen(
             if (filteredChats.isEmpty()) {
                 Box(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .padding(32.dp),
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 16.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(16.dp)
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.QrCode2,
@@ -293,9 +299,10 @@ fun ChatsScreen(
                             modifier = Modifier.size(64.dp)
                         )
                         Spacer(modifier = Modifier.height(16.dp))
-                        Text(
+                        com.example.ui.components.AutoResizeText(
                             text = if (chats.isEmpty()) "No conversations yet" else "No matching conversations",
-                            fontSize = 18.sp,
+                            maxFontSize = 18.sp,
+                            minFontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
@@ -315,13 +322,23 @@ fun ChatsScreen(
                             ) {
                                 Icon(Icons.Default.AddComment, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Scan QR / Add Contact", color = Color.White, fontWeight = FontWeight.Bold)
+                                com.example.ui.components.AutoResizeText(
+                                    text = "Scan QR / Add Contact",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    maxFontSize = 14.sp,
+                                    minFontSize = 11.sp
+                                )
                             }
                         }
                     }
                 }
             } else {
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                ) {
                     items(filteredChats, key = { it.id }) { chat ->
                         val isOnline = isChatOnline(chat)
                         val (dispName, dispAvatar) = chatDisplayMap[chat.id] ?: Pair(chat.name, chat.groupIconUri)
@@ -386,14 +403,43 @@ private fun resolveChatDisplay(
     } catch (_: Exception) {
         emptyList()
     }
-    val myId = currentUser?.id ?: ""
-    val otherUserId = participantIds.find { it != myId }
-    val contact = if (otherUserId != null) {
-        contacts.find { it.contactUserId == otherUserId }
-    } else {
-        contacts.find { "chat_${it.contactUserId}" == chat.id || it.contactDisplayName.equals(chat.name, ignoreCase = true) }
+    val myId = currentUser?.id?.lowercase()?.trim() ?: ""
+    val myEmail = currentUser?.email?.lowercase()?.trim() ?: ""
+    val myCanonical = if (myEmail.isNotBlank()) com.example.data.repository.LinkoRepository.canonicalUserIdFromEmail(myEmail, myId) else myId
+
+    val otherTokens = participantIds
+        .map { it.lowercase().trim() }
+        .filter { it.isNotBlank() && it != myId && it != myEmail && it != myCanonical }
+
+    val contact = contacts.find { c ->
+        val cId = c.contactUserId.lowercase().trim()
+        val cEmail = c.contactEmail.lowercase().trim()
+        val cKey = com.example.data.repository.LinkoRepository.canonicalParticipantKey(cEmail.ifBlank { cId })
+        otherTokens.any { token ->
+            token == cId || token == cEmail || com.example.data.repository.LinkoRepository.canonicalParticipantKey(token) == cKey
+        } ||
+        com.example.data.repository.LinkoRepository.generateDirectChatId(myId, myEmail, cId, cEmail) == chat.id ||
+        "chat_${c.contactUserId}" == chat.id ||
+        (!com.example.data.repository.LinkoRepository.isGenericPlaceholderName(chat.name, currentUser?.displayName, myEmail) &&
+            (c.contactDisplayName.equals(chat.name.trim(), ignoreCase = true) ||
+                c.contactEmail.equals(chat.name.trim(), ignoreCase = true)))
+    } ?: run {
+        val nonGemini = contacts.filter { it.contactUserId != "user_gemini" && !it.contactEmail.contains("gemini") }
+        if (nonGemini.size == 1 && com.example.data.repository.LinkoRepository.isGenericPlaceholderName(chat.name, currentUser?.displayName, myEmail)) {
+            nonGemini.first()
+        } else null
     }
-    val name = contact?.contactDisplayName ?: if (chat.name.isNotBlank() && !chat.name.equals(currentUser?.displayName, ignoreCase = true)) chat.name else "Contact"
+
+    val emailFallback = otherTokens.firstOrNull { it.contains("@") }
+        ?.substringBefore("@")
+        ?.replace(".", " ")
+        ?.split(" ")
+        ?.joinToString(" ") { word -> word.replaceFirstChar { it.uppercase() } }
+
+    val name = contact?.contactDisplayName?.takeIf { it.isNotBlank() }
+        ?: chat.name.takeIf { !com.example.data.repository.LinkoRepository.isGenericPlaceholderName(it, currentUser?.displayName, myEmail) }
+        ?: emailFallback
+        ?: "Linko Contact"
     val avatar = contact?.contactAvatarUri ?: chat.groupIconUri
     return Pair(name, avatar)
 }
@@ -435,27 +481,34 @@ private fun ChatItemRow(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = displayName,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Icon(
-                        imageVector = Icons.Default.Lock,
-                        contentDescription = "End-to-End Encrypted",
-                        tint = Emerald500,
-                        modifier = Modifier.size(13.dp)
-                    )
-                    Spacer(modifier = Modifier.weight(1f))
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = displayName,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(
+                            imageVector = Icons.Default.Lock,
+                            contentDescription = "End-to-End Encrypted",
+                            tint = Emerald500,
+                            modifier = Modifier.size(13.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
 
                     Text(
                         text = formatTime(chat.lastMessageTimestamp),
                         fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
                     )
                 }
 

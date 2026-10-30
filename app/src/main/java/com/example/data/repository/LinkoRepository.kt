@@ -11,10 +11,12 @@ import com.example.data.local.entity.CallLogEntity
 import com.example.data.local.entity.ChatEntity
 import com.example.data.local.entity.ContactEntity
 import com.example.data.local.entity.MessageEntity
+import com.example.data.local.entity.MessageStatus
 import com.example.data.local.entity.StatusEntity
 import com.example.data.local.entity.UserEntity
 import com.example.data.model.CallType
 import com.example.data.remote.FirestoreContactService
+import com.example.data.remote.FirestoreGroupService
 import com.example.data.remote.FirestoreMessageService
 import com.example.data.remote.GeminiClient
 import org.json.JSONArray
@@ -38,21 +40,20 @@ class LinkoRepository(
     private val ioScope = CoroutineScope(Dispatchers.IO)
 
     val currentUserFlow: Flow<UserEntity?> = userDao.getCurrentUserFlow()
-    val allChatsFlow: Flow<List<ChatEntity>> = chatDao.getAllChatsFlow().map { chatList ->
-        // Deduplicate conversations so each contact or group appears ONLY ONCE
-        chatList
-            .groupBy { chat ->
-                if (chat.isGroup) {
-                    chat.id
-                } else {
-                    chat.name.lowercase().trim()
-                }
+    val allChatsFlow: Flow<List<ChatEntity>> = kotlinx.coroutines.flow.combine(
+        chatDao.getAllChatsFlow(),
+        userDao.getCurrentUserFlow()
+    ) { chatList, me ->
+        val myContacts = if (me != null && me.email.isNotBlank()) {
+            try {
+                contactDao.getContactsList(me.email.lowercase().trim())
+            } catch (_: Exception) {
+                emptyList()
             }
-            .map { (_, duplicates) ->
-                // Aggregate and select the thread with the MAX(timestamp) / newest message
-                duplicates.maxByOrNull { it.lastMessageTimestamp }!!
-            }
-            .sortedByDescending { it.lastMessageTimestamp }
+        } else {
+            emptyList()
+        }
+        deduplicateChatsList(chatList, me, myContacts)
     }
     val allCallLogsFlow: Flow<List<CallLogEntity>> = callLogDao.getAllCallLogsFlow()
     val activeStatusesFlow: Flow<List<StatusEntity>> = statusDao.getActiveStatusesFlow(System.currentTimeMillis())
@@ -165,7 +166,7 @@ class LinkoRepository(
             senderEmail = "gemini.ai@linko.com",
             text = EncryptionManager.encrypt(welcomeText, "chat_gemini_ai"),
             timestamp = System.currentTimeMillis(),
-            status = "READ",
+            status = MessageStatus.READ,
             emailTransportStatus = "DELIVERED_INBOX",
             emailSubject = "Welcome to Gemini AI on Linko",
             emailMessageId = "<gemini-welcome@linko.net>",
@@ -179,36 +180,80 @@ class LinkoRepository(
 
     suspend fun registerOrLogin(email: String, displayName: String, username: String): UserEntity {
         userDao.clearCurrentUser()
-        val existing = userDao.getUserByEmail(email)
+        val normalizedEmail = email.lowercase().trim()
+        val canonicalId = canonicalUserIdFromEmail(normalizedEmail)
+        val existing = userDao.getUserByEmail(normalizedEmail) ?: userDao.getUserByEmail(email.trim())
         val user = if (existing != null) {
             val updated = existing.copy(
-                displayName = if (displayName.isNotBlank()) displayName else existing.displayName,
-                username = if (username.isNotBlank()) username else existing.username,
+                email = normalizedEmail,
+                displayName = if (displayName.isNotBlank()) displayName.trim() else existing.displayName,
+                username = if (username.isNotBlank()) username.trim() else existing.username,
+                qrPayload = "linko://user?email=$normalizedEmail&id=${existing.id}",
                 isCurrentUser = true
             )
             userDao.updateUser(updated)
             updated
         } else {
-            val newUserId = "user_${UUID.randomUUID().toString().take(8)}"
+            val newUserId = canonicalId
             val newUser = UserEntity(
                 id = newUserId,
-                email = email.trim(),
-                username = if (username.isBlank()) email.substringBefore("@") else username.trim(),
-                displayName = if (displayName.isBlank()) email.substringBefore("@") else displayName.trim(),
+                email = normalizedEmail,
+                username = if (username.isBlank()) normalizedEmail.substringBefore("@") else username.trim(),
+                displayName = if (displayName.isBlank()) normalizedEmail.substringBefore("@").replace(".", " ").capitalizeWords() else displayName.trim(),
                 avatarUri = null,
-                qrPayload = "linko://user?email=${email.trim()}&id=$newUserId",
+                qrPayload = "linko://user?email=$normalizedEmail&id=$newUserId",
                 statusMessage = "Hey! I am using Linko.",
                 isCurrentUser = true
             )
             userDao.insertUser(newUser)
             newUser
         }
+        deduplicateAndUnifyDirectChats(user)
         syncContactsWithFirestore(user.email)
+        syncMessagesWithFirestore(user)
         return user
     }
 
+    suspend fun loginAsGuest(customDisplayName: String? = null): UserEntity {
+        userDao.clearCurrentUser()
+        val guestEmail = "guest@linko.app"
+        val resolvedName = customDisplayName?.trim()?.takeIf { it.isNotBlank() } ?: "Guest User"
+        val existing = userDao.getUserByEmail(guestEmail)
+        val guestUser = if (existing != null) {
+            val updated = existing.copy(
+                displayName = if (customDisplayName.isNullOrBlank()) existing.displayName.ifBlank { "Guest User" } else resolvedName,
+                isCurrentUser = true
+            )
+            userDao.updateUser(updated)
+            updated
+        } else {
+            val guestId = "user_guest_local"
+            val newGuest = UserEntity(
+                id = guestId,
+                email = guestEmail,
+                username = "guest_user",
+                displayName = resolvedName,
+                avatarUri = null,
+                qrPayload = "linko://user?email=$guestEmail&id=$guestId",
+                statusMessage = "Exploring Linko in Guest Mode 👋",
+                isCurrentUser = true
+            )
+            userDao.insertUser(newGuest)
+            newGuest
+        }
+        // Ensure Guest immediately has the interactive Gemini AI Assistant chat ready to explore
+        createOrGetGeminiChat(guestUser)
+        return guestUser
+    }
+
     suspend fun logout() {
+        com.example.data.remote.FirestorePresenceService.stopListening()
         FirestoreContactService.stopRealtimeSync()
+        FirestoreGroupService.stopRealtimeGroupSync()
+        FirestoreMessageService.stopListening()
+        try {
+            com.google.firebase.auth.FirebaseAuth.getInstance().signOut()
+        } catch (_: Throwable) {}
         userDao.clearCurrentUser()
     }
 
@@ -225,19 +270,31 @@ class LinkoRepository(
             return Result.failure(IllegalArgumentException("You cannot add yourself as a contact."))
         }
 
+        val deterministicRecipientId = canonicalUserIdFromEmail(cleanContactEmail)
+        val ownerUser = userDao.getUserByEmail(cleanOwner) ?: userDao.getCurrentUser()
+
         val existing = contactDao.getContactByEmail(cleanOwner, cleanContactEmail)
         if (existing != null) {
-            FirestoreContactService.uploadContact(existing)
-            return Result.success(existing)
+            val normalizedExisting = if (existing.contactUserId != deterministicRecipientId) {
+                existing.copy(contactUserId = deterministicRecipientId).also {
+                    contactDao.insertContact(it)
+                }
+            } else {
+                existing
+            }
+            FirestoreContactService.uploadContact(normalizedExisting)
+            if (ownerUser != null) {
+                createOrGetDirectChat(ownerUser, normalizedExisting)
+            }
+            return Result.success(normalizedExisting)
         }
 
         val contactName = cleanContactEmail.substringBefore("@").replace(".", " ").capitalizeWords()
-        val recipientUserId = "user_${UUID.randomUUID().toString().take(8)}"
 
         val newContact = ContactEntity(
-            id = "c_${UUID.randomUUID().toString().take(8)}",
+            id = "c_${canonicalParticipantKey(cleanContactEmail)}",
             userEmail = cleanOwner,
-            contactUserId = recipientUserId,
+            contactUserId = deterministicRecipientId,
             contactEmail = cleanContactEmail,
             contactDisplayName = contactName,
             contactUsername = cleanContactEmail.substringBefore("@"),
@@ -246,14 +303,14 @@ class LinkoRepository(
         contactDao.insertContact(newContact)
         FirestoreContactService.uploadContact(newContact)
 
-        // Bidirectional pairing: ensure recipient also has owner as contact
-        val ownerUser = userDao.getUserByEmail(cleanOwner)
+        // Bidirectional pairing: ensure recipient also has owner as contact with deterministic ID
         if (ownerUser != null) {
+            val ownerCanonicalId = canonicalUserIdFromEmail(cleanOwner, ownerUser.id)
             val reciprocalContact = ContactEntity(
-                id = "c_${UUID.randomUUID().toString().take(8)}",
+                id = "c_${canonicalParticipantKey(cleanOwner)}",
                 userEmail = cleanContactEmail,
-                contactUserId = ownerUser.id,
-                contactEmail = ownerUser.email,
+                contactUserId = ownerCanonicalId,
+                contactEmail = cleanOwner,
                 contactDisplayName = ownerUser.displayName,
                 contactUsername = ownerUser.username,
                 contactAvatarUri = ownerUser.avatarUri,
@@ -272,7 +329,8 @@ class LinkoRepository(
         val trimmed = qrPayload.trim()
 
         // Strict Linko URI schema validation
-        val isValidLinkoSchema = trimmed.startsWith("linko://user", ignoreCase = true)
+        val isValidLinkoSchema = trimmed.startsWith("linko://user", ignoreCase = true) ||
+            trimmed.startsWith("linko://contact", ignoreCase = true)
 
         if (!isValidLinkoSchema) {
             return Result.failure(IllegalArgumentException("Invalid Linko QR Code"))
@@ -330,7 +388,7 @@ class LinkoRepository(
 
         // Look up if recipient user exists in local database (DO NOT update or overwrite local currentUser state)
         val existingUser = userDao.getUserByEmail(cleanContactEmail)
-        val finalUserId = if (qrUserId.isNotBlank()) qrUserId else (existingUser?.id ?: "user_${UUID.randomUUID().toString().take(8)}")
+        val finalUserId = canonicalUserIdFromEmail(cleanContactEmail, qrUserId.ifBlank { existingUser?.id ?: "" })
         val finalDisplayName = when {
             displayName.isNotBlank() -> displayName
             existingUser != null && existingUser.displayName.isNotBlank() -> existingUser.displayName
@@ -340,7 +398,7 @@ class LinkoRepository(
 
         val existingContact = contactDao.getContactByEmail(cleanOwner, cleanContactEmail)
         val contactToSave = ContactEntity(
-            id = existingContact?.id ?: "c_${UUID.randomUUID().toString().take(8)}",
+            id = existingContact?.id ?: "c_${canonicalParticipantKey(cleanContactEmail)}",
             userEmail = cleanOwner,
             contactUserId = finalUserId,
             contactEmail = cleanContactEmail,
@@ -355,13 +413,14 @@ class LinkoRepository(
         FirestoreContactService.uploadContact(contactToSave)
 
         // Bidirectional pairing: ensure recipient contact list also incorporates the scanner's details symmetrically
-        val ownerUser = userDao.getUserByEmail(cleanOwner)
+        val ownerUser = userDao.getUserByEmail(cleanOwner) ?: userDao.getCurrentUser()
         if (ownerUser != null) {
+            val ownerCanonicalId = canonicalUserIdFromEmail(cleanOwner, ownerUser.id)
             val reciprocalContact = ContactEntity(
-                id = "c_${UUID.randomUUID().toString().take(8)}",
+                id = "c_${canonicalParticipantKey(cleanOwner)}",
                 userEmail = cleanContactEmail,
-                contactUserId = ownerUser.id,
-                contactEmail = ownerUser.email,
+                contactUserId = ownerCanonicalId,
+                contactEmail = cleanOwner,
                 contactDisplayName = ownerUser.displayName,
                 contactUsername = ownerUser.username,
                 contactAvatarUri = ownerUser.avatarUri,
@@ -385,124 +444,262 @@ class LinkoRepository(
         messageDao.markMessageAsDeletedForEveryone(messageId)
     }
 
-    fun syncContactsWithFirestore(ownerEmail: String) {
-        if (ownerEmail.isBlank()) return
+    fun syncContactsWithFirestore(
+        ownerEmail: String,
+        onNewContactReceived: ((ContactEntity) -> Unit)? = null
+    ) {
+        val cleanOwnerEmail = ownerEmail.lowercase().trim()
+        if (cleanOwnerEmail.isBlank()) return
 
         // 1. Fetch existing contacts from Firestore and sync to Room
-        FirestoreContactService.fetchAndSyncContacts(ownerEmail, ioScope) { remoteContacts ->
-            remoteContacts.forEach { contactDao.insertContact(it) }
+        FirestoreContactService.fetchAndSyncContacts(cleanOwnerEmail, ioScope) { remoteContacts ->
+            val me = userDao.getUserByEmail(cleanOwnerEmail) ?: userDao.getCurrentUser()
+            remoteContacts.forEach { remote ->
+                val cleanEmail = remote.contactEmail.lowercase().trim()
+                val canonicalContactId = canonicalUserIdFromEmail(cleanEmail, remote.contactUserId)
+                val existingLocal = contactDao.getContactByEmail(cleanOwnerEmail, cleanEmail)
+                val mergedContact = remote.copy(
+                    id = existingLocal?.id ?: remote.id,
+                    userEmail = cleanOwnerEmail,
+                    contactEmail = cleanEmail,
+                    contactUserId = canonicalContactId,
+                    contactDisplayName = if (!isGenericPlaceholderName(remote.contactDisplayName, me?.displayName, cleanOwnerEmail)) {
+                        remote.contactDisplayName
+                    } else {
+                        existingLocal?.contactDisplayName?.takeIf { !isGenericPlaceholderName(it, me?.displayName, cleanOwnerEmail) }
+                            ?: cleanEmail.substringBefore("@").replace(".", " ").capitalizeWords()
+                    }
+                )
+                contactDao.insertContact(mergedContact)
+            }
+            if (me != null) {
+                deduplicateAndUnifyDirectChats(me)
+            }
         }
 
         // 2. Start real-time snapshot listener
-        FirestoreContactService.startRealtimeContactSync(ownerEmail, ioScope) { liveContacts ->
-            liveContacts.forEach { contactDao.insertContact(it) }
+        FirestoreContactService.startRealtimeContactSync(cleanOwnerEmail, ioScope) { liveContacts ->
+            val me = userDao.getUserByEmail(cleanOwnerEmail) ?: userDao.getCurrentUser()
+            val existingEmails = contactDao.getContactsList(cleanOwnerEmail)
+                .map { it.contactEmail.lowercase().trim() }
+                .toSet()
+            liveContacts.forEach { contact ->
+                val cleanEmail = contact.contactEmail.lowercase().trim()
+                val isNew = cleanEmail !in existingEmails
+                val existingLocal = contactDao.getContactByEmail(cleanOwnerEmail, cleanEmail)
+                val canonicalContactId = canonicalUserIdFromEmail(cleanEmail, contact.contactUserId)
+                val mergedContact = contact.copy(
+                    id = existingLocal?.id ?: contact.id,
+                    userEmail = cleanOwnerEmail,
+                    contactEmail = cleanEmail,
+                    contactUserId = canonicalContactId,
+                    contactDisplayName = if (!isGenericPlaceholderName(contact.contactDisplayName, me?.displayName, cleanOwnerEmail)) {
+                        contact.contactDisplayName
+                    } else {
+                        existingLocal?.contactDisplayName?.takeIf { !isGenericPlaceholderName(it, me?.displayName, cleanOwnerEmail) }
+                            ?: cleanEmail.substringBefore("@").replace(".", " ").capitalizeWords()
+                    }
+                )
+                contactDao.insertContact(mergedContact)
+                if (isNew && cleanEmail.isNotBlank()) {
+                    onNewContactReceived?.invoke(mergedContact)
+                }
+            }
+            if (me != null) {
+                deduplicateAndUnifyDirectChats(me)
+            }
         }
 
         // 3. Upload local contacts to Firestore
         ioScope.launch {
-            val localContacts = contactDao.getContactsList(ownerEmail)
+            val localContacts = contactDao.getContactsList(cleanOwnerEmail)
             FirestoreContactService.uploadContactsBatch(localContacts)
         }
     }
 
+    fun syncGroupsWithFirestore(user: UserEntity) {
+        if (user.email.isBlank() || user.id.isBlank()) return
+        FirestoreGroupService.startRealtimeGroupSync(
+            userId = user.id,
+            userEmail = user.email,
+            scope = ioScope
+        ) { remoteGroups ->
+            remoteGroups.forEach { group ->
+                val existing = chatDao.getChatById(group.id)
+                if (existing == null || group.lastMessageTimestamp >= existing.lastMessageTimestamp) {
+                    chatDao.insertOrUpdateChat(group)
+                }
+            }
+        }
+    }
+
     companion object {
+        fun canonicalUserIdFromEmail(email: String, fallbackId: String = ""): String {
+            val normalized = email.lowercase().trim()
+            if (normalized.isBlank()) {
+                return fallbackId.lowercase().trim().ifBlank { "user_unknown" }
+            }
+            if (normalized == "gemini.ai@linko.com" || normalized == "gemini_ai@google.com" || normalized == "gemini.ai@google.com") {
+                return "user_gemini"
+            }
+            if (normalized == "guest@linko.app") {
+                return "user_guest_local"
+            }
+            val sanitized = normalized.replace("@", "_at_").replace(Regex("[^a-z0-9_]"), "_")
+            return "user_$sanitized"
+        }
+
+        fun canonicalParticipantKey(idOrEmail: String): String {
+            val raw = idOrEmail.lowercase().trim()
+            if (raw.isBlank()) return "unknown"
+            if (raw == "user_gemini" || raw == "gemini" || raw == "gemini.ai@linko.com") {
+                return "user_gemini"
+            }
+            if (raw.contains("@")) {
+                return canonicalUserIdFromEmail(raw)
+            }
+            return raw.replace(Regex("[^a-z0-9_]"), "_")
+        }
+
+        /**
+         * Generates a single deterministic, order-independent direct conversation ID for any two users
+         * by normalizing their identifiers and sorting them alphabetically before combining.
+         * Ensures generateDirectChatId(A, B) == generateDirectChatId(B, A) regardless of who is sender or receiver.
+         */
         fun generateDirectChatId(user1Id: String, user2Id: String): String {
-            if (user1Id == "user_gemini" || user2Id == "user_gemini" || user1Id == "gemini" || user2Id == "gemini") {
+            val k1 = canonicalParticipantKey(user1Id)
+            val k2 = canonicalParticipantKey(user2Id)
+            if (k1 == "user_gemini" || k2 == "user_gemini") {
                 return "chat_gemini_ai"
             }
-            val u1 = user1Id.trim()
-            val u2 = user2Id.trim()
-            val sorted = if (u1 < u2) "${u1}_${u2}" else "${u2}_${u1}"
-            return "chat_$sorted"
+            val sorted = listOf(k1, k2).sorted()
+            return "chat_${sorted[0]}_${sorted[1]}"
+        }
+
+        fun generateDirectChatId(
+            user1Id: String,
+            user1Email: String,
+            user2Id: String,
+            user2Email: String
+        ): String {
+            val primary1 = user1Email.trim().ifBlank { user1Id.trim() }
+            val primary2 = user2Email.trim().ifBlank { user2Id.trim() }
+            return generateDirectChatId(primary1, primary2)
+        }
+
+        fun isGenericPlaceholderName(
+            name: String?,
+            myDisplayName: String? = null,
+            myEmail: String? = null
+        ): Boolean {
+            if (name.isNullOrBlank()) return true
+            val normalized = name.lowercase().trim()
+            if (normalized in setOf("contact", "linko contact", "linko chat", "chat", "unknown", "user", "friend")) {
+                return true
+            }
+            if (!myDisplayName.isNullOrBlank() && normalized == myDisplayName.lowercase().trim()) {
+                return true
+            }
+            if (!myEmail.isNullOrBlank() && normalized == myEmail.lowercase().trim()) {
+                return true
+            }
+            return false
         }
     }
 
     suspend fun createOrGetDirectChat(me: UserEntity, contact: ContactEntity): ChatEntity {
-        val chatId = generateDirectChatId(me.id, contact.contactUserId)
-        val existing = chatDao.getChatById(chatId)
-        if (existing != null) {
-            val participants = parseJsonArray(existing.participantIdsJson)
-            var updated = false
-            if (!participants.contains(me.id)) {
-                participants.add(me.id)
-                updated = true
-            }
-            if (!participants.contains(contact.contactUserId)) {
-                participants.add(contact.contactUserId)
-                updated = true
-            }
-            if (updated) {
-                val updatedChat = existing.copy(
-                    participantIdsJson = toJsonArray(participants),
-                    name = if (existing.name.isBlank()) contact.contactDisplayName else existing.name,
-                    groupIconUri = existing.groupIconUri ?: contact.contactAvatarUri
-                )
-                chatDao.insertOrUpdateChat(updatedChat)
-                return updatedChat
-            }
-            return existing
-        }
-
-        val existingList = chatDao.getAllChatsList()
-        val legacyChat = existingList.find { chat ->
-            if (chat.isGroup) false
-            else {
-                val parts = parseJsonArray(chat.participantIdsJson)
-                (parts.contains(me.id) && parts.contains(contact.contactUserId)) ||
-                chat.id == "chat_${contact.contactUserId}" ||
-                chat.id == "chat_${me.id}"
-            }
-        }
-        if (legacyChat != null) {
-            return legacyChat
-        }
-
-        val newChat = ChatEntity(
-            id = chatId,
-            isGroup = false,
-            name = contact.contactDisplayName,
-            groupIconUri = contact.contactAvatarUri,
-            participantIdsJson = toJsonArray(listOf(me.id, contact.contactUserId).distinct()),
-            lastMessageText = "Chat started",
-            lastMessageTimestamp = System.currentTimeMillis()
+        return resolveAndUnifyDirectChat(
+            me = me,
+            peerUserId = contact.contactUserId,
+            peerEmail = contact.contactEmail,
+            peerDisplayName = contact.contactDisplayName,
+            peerAvatarUri = contact.contactAvatarUri
         )
-        chatDao.insertOrUpdateChat(newChat)
-        return newChat
     }
 
-    suspend fun createGroupChat(me: UserEntity, groupName: String, selectedContacts: List<ContactEntity>, groupDesc: String?): ChatEntity {
-        val groupId = "group_${UUID.randomUUID().toString().take(8)}"
+    suspend fun createGroupChat(
+        me: UserEntity,
+        groupName: String,
+        selectedContacts: List<ContactEntity>,
+        groupDesc: String?,
+        channelType: String = "GROUP"
+    ): ChatEntity {
+        val prefix = if (channelType.equals("CHANNEL", ignoreCase = true)) "channel" else "group"
+        val groupId = "${prefix}_${UUID.randomUUID().toString().take(8)}"
         val participantIds = mutableListOf(me.id)
-        selectedContacts.forEach { participantIds.add(it.contactUserId) }
-        val idsJson = participantIds.joinToString(prefix = "[\"", postfix = "\"]", separator = "\",\"")
+        val participantEmails = mutableListOf(me.email.lowercase().trim())
+        selectedContacts.forEach { contact ->
+            if (!participantIds.contains(contact.contactUserId)) {
+                participantIds.add(contact.contactUserId)
+            }
+            val cleanEmail = contact.contactEmail.lowercase().trim()
+            if (cleanEmail.isNotBlank() && !participantEmails.contains(cleanEmail)) {
+                participantEmails.add(cleanEmail)
+            }
+        }
+        val idsJson = toJsonArray(participantIds)
+        val isBroadcastChannel = channelType.equals("CHANNEL", ignoreCase = true)
+        val defaultDesc = if (isBroadcastChannel) {
+            "Broadcast Channel created by ${me.displayName}"
+        } else {
+            "Group created by ${me.displayName}"
+        }
+        val resolvedName = groupName.ifBlank { if (isBroadcastChannel) "Custom Channel" else "Custom Group" }
+        val now = System.currentTimeMillis()
 
         val newGroup = ChatEntity(
             id = groupId,
             isGroup = true,
-            name = groupName.ifBlank { "Custom Group" },
-            groupDescription = groupDesc ?: "Group created by ${me.displayName}",
+            name = resolvedName,
+            groupDescription = groupDesc?.takeIf { it.isNotBlank() } ?: defaultDesc,
             participantIdsJson = idsJson,
             adminIdsJson = "[\"${me.id}\"]",
-            lastMessageText = "${me.displayName} created group \"$groupName\"",
-            lastMessageTimestamp = System.currentTimeMillis()
+            lastMessageText = "${me.displayName} created ${if (isBroadcastChannel) "channel" else "group"} \"$resolvedName\" (${selectedContacts.size + 1} members)",
+            lastMessageTimestamp = now
         )
         chatDao.insertOrUpdateChat(newGroup)
 
-        // System message inside group
+        // Sync group/channel and multi-contact invitations to Cloud Firestore
+        FirestoreGroupService.uploadGroupChat(
+            chat = newGroup,
+            participantEmails = participantEmails,
+            creatorId = me.id,
+            channelType = if (isBroadcastChannel) "CHANNEL" else "GROUP"
+        )
+        if (selectedContacts.isNotEmpty()) {
+            FirestoreGroupService.inviteContactsToGroup(
+                chat = newGroup,
+                inviter = me,
+                invitedContacts = selectedContacts,
+                channelType = if (isBroadcastChannel) "CHANNEL" else "GROUP"
+            )
+        }
+
+        // System message inside group/channel
+        val invitedNames = selectedContacts.joinToString { it.contactDisplayName }
+        val welcomePlain = if (selectedContacts.isNotEmpty()) {
+            "🎉 Welcome to $resolvedName! Invited: $invitedNames."
+        } else {
+            "🎉 Welcome to $resolvedName! Channel created and synced to Cloud Firestore."
+        }
+        val encryptedWelcome = EncryptionManager.encrypt(welcomePlain, groupId)
         val systemMessage = MessageEntity(
             id = "m_${UUID.randomUUID().toString().take(8)}",
             chatId = groupId,
             senderId = me.id,
             senderName = me.displayName,
             senderEmail = me.email,
-            text = "🎉 Welcome to $groupName! Group chat created and email notifications active.",
-            timestamp = System.currentTimeMillis(),
-            status = "READ",
-            emailTransportStatus = "DELIVERED_INBOX",
-            emailSubject = "Linko Group: $groupName",
-            emailMessageId = "<group-${UUID.randomUUID().toString().take(6)}@linko.net>"
+            text = encryptedWelcome,
+            timestamp = now,
+            status = MessageStatus.SENT,
+            emailTransportStatus = "DISPATCHED_SMTP",
+            emailSubject = "Linko ${if (isBroadcastChannel) "Channel" else "Group"}: $resolvedName",
+            emailMessageId = "<group-${UUID.randomUUID().toString().take(6)}@linko.net>",
+            isEncrypted = true,
+            encryptionAlgorithm = "AES-256-GCM"
         )
         messageDao.insertMessage(systemMessage)
+        FirestoreMessageService.uploadMessage(systemMessage, participantIds)
 
         return newGroup
     }
@@ -522,6 +719,7 @@ class LinkoRepository(
 
         val encryptedText = EncryptionManager.encrypt(text, chatId)
 
+        // Stage 1: Newly sent message starts strictly with status = 'sent' (Single Gray Tick)
         val message = MessageEntity(
             id = msgId,
             chatId = chatId,
@@ -533,7 +731,7 @@ class LinkoRepository(
             mediaType = mediaType,
             formattedRichText = formattedRichText,
             timestamp = System.currentTimeMillis(),
-            status = "SENT",
+            status = MessageStatus.SENT,
             deliveredAt = null,
             readAt = null,
             emailTransportStatus = "DISPATCHED_SMTP",
@@ -548,27 +746,46 @@ class LinkoRepository(
             mediaType == "IMAGE" -> "📷 Photo"
             mediaType == "AUDIO" -> "🎙️ Voice note (${text.ifBlank { "0:05" }})"
             mediaType == "DOCUMENT" -> "📄 Attachment"
+            mediaType == "LOCATION" -> {
+                val locTitle = try {
+                    JSONObject(text).optString("title", "Location")
+                } catch (_: Exception) {
+                    "Location"
+                }
+                "📍 Google Maps: $locTitle"
+            }
             else -> text
         }
         chatDao.updateLastMessage(chatId, previewText, System.currentTimeMillis())
 
         val participants = parseJsonArray(chat?.participantIdsJson ?: "")
-        FirestoreMessageService.uploadMessage(message, participants)
-
-        // Handle delivery & read receipts with Firestore server timestamps
-        ioScope.launch {
-            delay(500)
-            // Mark DELIVERED in Firestore using FieldValue.serverTimestamp()
-            FirestoreMessageService.markMessageDelivered(msgId) { deliveredTimestamp ->
+        FirestoreMessageService.uploadMessage(
+            message = message,
+            participants = participants,
+            onServerSentAck = {
                 ioScope.launch {
-                    messageDao.markMessageDelivered(msgId, deliveredTimestamp)
-                    messageDao.updateEmailTransportStatus(msgId, "DELIVERED_INBOX")
+                    messageDao.updateMessageReceipt(msgId, MessageStatus.SENT, null, null)
                 }
             }
+        )
+        if (chat?.isGroup == true) {
+            FirestoreGroupService.updateGroupLastMessage(chatId, previewText, System.currentTimeMillis())
+        }
 
-            if (chatId == "chat_gemini_ai" || chat?.name?.contains("Gemini") == true) {
-                delay(1200)
-                // Gemini reads the prompt: update Firestore read receipt with serverTimestamp
+        // Only the automated Gemini AI assistant simulates server bot reception and reading.
+        // Direct and group human conversations NEVER auto-advance to 'delivered' or 'read' on the sender's device;
+        // they wait for the recipient's device to receive ('delivered') and display ('read') the message.
+        if (chatId == "chat_gemini_ai" || chat?.name?.contains("Gemini") == true) {
+            ioScope.launch {
+                delay(500)
+                FirestoreMessageService.markMessageDelivered(msgId) { deliveredTimestamp ->
+                    ioScope.launch {
+                        messageDao.markMessageDelivered(msgId, deliveredTimestamp)
+                        messageDao.updateEmailTransportStatus(msgId, "DELIVERED_INBOX")
+                    }
+                }
+
+                delay(900)
                 FirestoreMessageService.markMessageRead(msgId) { readTimestamp ->
                     ioScope.launch {
                         messageDao.markSingleMessageAsRead(msgId, readTimestamp)
@@ -589,7 +806,7 @@ class LinkoRepository(
                     senderEmail = "gemini.ai@linko.com",
                     text = encryptedAiResponse,
                     timestamp = replyNow,
-                    status = "DELIVERED",
+                    status = MessageStatus.DELIVERED,
                     deliveredAt = replyNow,
                     readAt = null,
                     emailTransportStatus = "DELIVERED_INBOX",
@@ -601,14 +818,31 @@ class LinkoRepository(
                 messageDao.insertMessage(replyMsg)
                 FirestoreMessageService.uploadMessage(replyMsg, participants)
                 chatDao.updateLastMessage(chatId, aiResponse.take(60), System.currentTimeMillis())
-            } else {
-                // For direct peer contacts, mark as read after delay with Firestore server timestamp
-                delay(2200)
-                FirestoreMessageService.markMessageRead(msgId) { readTimestamp ->
-                    ioScope.launch {
-                        messageDao.markSingleMessageAsRead(msgId, readTimestamp)
-                    }
-                }
+            }
+        }
+    }
+
+    /**
+     * Stage 3: Marks ONLY the messages that are currently visible on the recipient's screen as 'read'.
+     */
+    suspend fun markVisibleMessagesAsRead(
+        chatId: String,
+        currentUserId: String,
+        currentUserEmail: String = "",
+        visibleMessageIds: List<String>
+    ) {
+        if (visibleMessageIds.isEmpty()) return
+        val now = System.currentTimeMillis()
+        messageDao.markMessagesAsReadByIds(visibleMessageIds, now)
+        chatDao.clearUnreadCount(chatId)
+        FirestoreMessageService.markVisibleMessagesRead(
+            chatId = chatId,
+            visibleMessageIds = visibleMessageIds,
+            currentUserId = currentUserId,
+            currentUserEmail = currentUserEmail
+        ) { readTimestamp ->
+            ioScope.launch {
+                messageDao.markMessagesAsReadByIds(visibleMessageIds, readTimestamp)
             }
         }
     }
@@ -624,10 +858,567 @@ class LinkoRepository(
         }
     }
 
-    fun startChatReceiptSync(chatId: String, currentUserId: String) {
-        FirestoreMessageService.startListeningToChatReceipts(chatId, currentUserId, ioScope) { msgId, status, deliveredAt, readAt ->
-            messageDao.updateMessageReceipt(msgId, status, deliveredAt, readAt)
+    fun startChatReceiptSync(chatId: String, currentUserId: String, currentUserEmail: String = "") {
+        FirestoreMessageService.startListeningToChatReceipts(
+            chatId = chatId,
+            currentUserId = currentUserId,
+            currentUserEmail = currentUserEmail,
+            scope = ioScope,
+            onIncomingMessageSynced = { incomingMessage ->
+                val existing = messageDao.getMessageById(incomingMessage.id)
+                if (existing == null) {
+                    val plainText = EncryptionManager.decrypt(incomingMessage.text, incomingMessage.chatId)
+                    val targetEncrypted = if (incomingMessage.chatId != chatId) {
+                        EncryptionManager.encrypt(plainText, chatId)
+                    } else {
+                        incomingMessage.text
+                    }
+                    messageDao.insertMessage(incomingMessage.copy(chatId = chatId, text = targetEncrypted))
+                } else {
+                    messageDao.updateMessageReceipt(
+                        incomingMessage.id,
+                        incomingMessage.status,
+                        incomingMessage.deliveredAt,
+                        incomingMessage.readAt
+                    )
+                }
+            },
+            onReceiptUpdated = { msgId, status, deliveredAt, readAt ->
+                messageDao.updateMessageReceipt(msgId, status, deliveredAt, readAt)
+                if (MessageStatus.normalize(status) != MessageStatus.SENT) {
+                    messageDao.updateEmailTransportStatus(msgId, "DELIVERED_INBOX")
+                }
+            }
+        )
+    }
+
+    fun syncMessagesWithFirestore(
+        user: UserEntity,
+        onNewIncomingMessageAlert: ((MessageEntity, String, Boolean) -> Unit)? = null
+    ) {
+        if (user.id.isBlank() && user.email.isBlank()) return
+        FirestoreMessageService.startGlobalMessageSync(
+            currentUserId = user.id,
+            currentUserEmail = user.email,
+            scope = ioScope,
+            onIncomingMessageReceived = { incomingMessage ->
+                val existing = messageDao.getMessageById(incomingMessage.id)
+                if (existing == null) {
+                    val plainPreview = EncryptionManager.decrypt(incomingMessage.text, incomingMessage.chatId)
+                    val existingChat = chatDao.getChatById(incomingMessage.chatId)
+                    val isGroupChat = existingChat?.isGroup == true ||
+                        incomingMessage.chatId.startsWith("group_") ||
+                        incomingMessage.chatId.startsWith("channel_")
+
+                    if (isGroupChat || incomingMessage.chatId == "chat_gemini_ai") {
+                        if (existingChat == null) {
+                            chatDao.insertOrUpdateChat(
+                                ChatEntity(
+                                    id = incomingMessage.chatId,
+                                    isGroup = isGroupChat,
+                                    name = incomingMessage.senderName.ifBlank { "Group Chat" },
+                                    participantIdsJson = toJsonArray(listOf(user.id, incomingMessage.senderId).distinct()),
+                                    lastMessageText = plainPreview.take(60),
+                                    lastMessageTimestamp = incomingMessage.timestamp,
+                                    unreadCount = 1
+                                )
+                            )
+                        } else {
+                            chatDao.updateLastMessage(
+                                incomingMessage.chatId,
+                                plainPreview.take(60),
+                                incomingMessage.timestamp
+                            )
+                        }
+                        messageDao.insertMessage(incomingMessage)
+                        onNewIncomingMessageAlert?.invoke(incomingMessage, plainPreview, isGroupChat)
+                    } else {
+                        val myCanonicalId = canonicalUserIdFromEmail(user.email, user.id)
+                        val isSentByMe = incomingMessage.senderId == user.id ||
+                            incomingMessage.senderId == myCanonicalId ||
+                            (user.email.isNotBlank() && incomingMessage.senderEmail.equals(user.email, ignoreCase = true))
+
+                        val unifiedChat = if (!isSentByMe) {
+                            resolveAndUnifyDirectChat(
+                                me = user,
+                                peerUserId = incomingMessage.senderId,
+                                peerEmail = incomingMessage.senderEmail,
+                                peerDisplayName = incomingMessage.senderName,
+                                legacyChatIdHint = incomingMessage.chatId,
+                                incomingPreview = plainPreview.take(60),
+                                incomingTimestamp = incomingMessage.timestamp,
+                                incrementUnread = true
+                            )
+                        } else {
+                            existingChat ?: chatDao.getAllChatsList().firstOrNull { !it.isGroup && it.id == incomingMessage.chatId }
+                        }
+
+                        val targetChatId = unifiedChat?.id ?: incomingMessage.chatId
+                        val resolvedSenderName = if (!isSentByMe && unifiedChat != null && !isGenericPlaceholderName(unifiedChat.name, user.displayName, user.email)) {
+                            unifiedChat.name
+                        } else {
+                            incomingMessage.senderName
+                        }
+                        val encryptedForTarget = if (targetChatId != incomingMessage.chatId) {
+                            EncryptionManager.encrypt(plainPreview, targetChatId)
+                        } else {
+                            incomingMessage.text
+                        }
+                        val unifiedMessage = incomingMessage.copy(
+                            chatId = targetChatId,
+                            senderName = resolvedSenderName,
+                            text = encryptedForTarget
+                        )
+                        messageDao.insertMessage(unifiedMessage)
+                        if (!isSentByMe) {
+                            onNewIncomingMessageAlert?.invoke(unifiedMessage, plainPreview, false)
+                        }
+                    }
+                } else {
+                    messageDao.updateMessageReceipt(
+                        incomingMessage.id,
+                        incomingMessage.status,
+                        incomingMessage.deliveredAt,
+                        incomingMessage.readAt
+                    )
+                }
+            },
+            onReceiptUpdated = { msgId, status, deliveredAt, readAt ->
+                messageDao.updateMessageReceipt(msgId, status, deliveredAt, readAt)
+                if (MessageStatus.normalize(status) != MessageStatus.SENT) {
+                    messageDao.updateEmailTransportStatus(msgId, "DELIVERED_INBOX")
+                }
+            }
+        )
+    }
+
+    suspend fun ensureChatForNotification(
+        chatId: String,
+        senderName: String,
+        senderEmail: String,
+        messageText: String,
+        isGroup: Boolean,
+        currentUser: UserEntity?
+    ): ChatEntity {
+        val now = System.currentTimeMillis()
+        val isGroupChat = isGroup || chatId.startsWith("group_") || chatId.startsWith("channel_")
+
+        val chat = if (!isGroupChat && chatId != "chat_gemini_ai" && currentUser != null) {
+            resolveAndUnifyDirectChat(
+                me = currentUser,
+                peerUserId = canonicalUserIdFromEmail(senderEmail),
+                peerEmail = senderEmail,
+                peerDisplayName = senderName,
+                legacyChatIdHint = chatId,
+                incomingPreview = messageText.takeIf { it.isNotBlank() }?.take(60),
+                incomingTimestamp = now,
+                incrementUnread = false
+            )
+        } else {
+            val existing = chatDao.getChatById(chatId)
+            val myId = currentUser?.id ?: "user_local"
+            val resolvedName = senderName.ifBlank { existing?.name ?: "Linko Chat" }
+            if (existing != null) {
+                existing
+            } else {
+                val created = ChatEntity(
+                    id = chatId,
+                    isGroup = isGroupChat,
+                    name = resolvedName,
+                    participantIdsJson = "[\"$myId\"]",
+                    lastMessageText = messageText.ifBlank { "Conversation opened from notification" },
+                    lastMessageTimestamp = now
+                )
+                chatDao.insertOrUpdateChat(created)
+                created
+            }
         }
+
+        val targetChatId = chat.id
+        if (messageText.isNotBlank()) {
+            val existingMsgs = messageDao.getMessagesForChatList(targetChatId)
+            val alreadyExists = existingMsgs.any {
+                EncryptionManager.decrypt(it.text, targetChatId) == messageText
+            }
+            if (!alreadyExists) {
+                val resolvedSenderName = chat.name.ifBlank { senderName.ifBlank { "Linko Contact" } }
+                val resolvedSenderEmail = senderEmail.ifBlank { "${resolvedSenderName.lowercase().replace(" ", ".")}@linko.com" }
+                val msgEntity = MessageEntity(
+                    id = "m_notif_${UUID.randomUUID().toString().take(8)}",
+                    chatId = targetChatId,
+                    senderId = canonicalUserIdFromEmail(resolvedSenderEmail),
+                    senderName = resolvedSenderName,
+                    senderEmail = resolvedSenderEmail,
+                    text = EncryptionManager.encrypt(messageText, targetChatId),
+                    timestamp = now,
+                    status = MessageStatus.DELIVERED,
+                    deliveredAt = now,
+                    isEncrypted = true,
+                    encryptionAlgorithm = "AES-256-GCM"
+                )
+                messageDao.insertMessage(msgEntity)
+                chatDao.updateLastMessage(targetChatId, messageText.take(60), now)
+            }
+        }
+        return chat
+    }
+
+    /**
+     * Resolves a single unified direct chat thread between [me] and the given peer, merging any
+     * duplicate or legacy threads (such as threads named "Contact" vs the user's real display name)
+     * into one canonical ChatEntity with a deterministic order-independent ID.
+     */
+    suspend fun resolveAndUnifyDirectChat(
+        me: UserEntity,
+        peerUserId: String,
+        peerEmail: String,
+        peerDisplayName: String,
+        peerAvatarUri: String? = null,
+        legacyChatIdHint: String? = null,
+        incomingPreview: String? = null,
+        incomingTimestamp: Long? = null,
+        incrementUnread: Boolean = false
+    ): ChatEntity {
+        val myEmailClean = me.email.lowercase().trim()
+        val myCanonicalId = canonicalUserIdFromEmail(myEmailClean, me.id)
+        val myContacts = if (myEmailClean.isNotBlank()) {
+            contactDao.getContactsList(myEmailClean)
+        } else {
+            emptyList()
+        }
+
+        val matchedContact = findMatchingContactForPeer(
+            contacts = myContacts,
+            peerUserId = peerUserId,
+            peerEmail = peerEmail,
+            peerDisplayName = peerDisplayName,
+            me = me
+        )
+
+        val resolvedPeerEmail = matchedContact?.contactEmail?.lowercase()?.trim()?.takeIf { it.isNotBlank() }
+            ?: peerEmail.lowercase().trim()
+        val resolvedPeerUserId = canonicalUserIdFromEmail(
+            resolvedPeerEmail,
+            matchedContact?.contactUserId?.takeIf { it.isNotBlank() } ?: peerUserId
+        )
+
+        val canonicalChatId = generateDirectChatId(
+            user1Id = me.id,
+            user1Email = myEmailClean,
+            user2Id = resolvedPeerUserId,
+            user2Email = resolvedPeerEmail
+        )
+
+        // If peer wasn't in local contacts yet but we have their email or name, auto-save/update contact so name is preserved
+        if (matchedContact == null && resolvedPeerEmail.isNotBlank() && resolvedPeerEmail != myEmailClean && myEmailClean.isNotBlank()) {
+            val cleanDisplay = if (!isGenericPlaceholderName(peerDisplayName, me.displayName, myEmailClean)) {
+                peerDisplayName.trim()
+            } else {
+                resolvedPeerEmail.substringBefore("@").replace(".", " ").capitalizeWords()
+            }
+            val autoContact = ContactEntity(
+                id = "c_${canonicalParticipantKey(resolvedPeerEmail)}",
+                userEmail = myEmailClean,
+                contactUserId = resolvedPeerUserId,
+                contactEmail = resolvedPeerEmail,
+                contactDisplayName = cleanDisplay,
+                contactUsername = resolvedPeerEmail.substringBefore("@"),
+                contactAvatarUri = peerAvatarUri,
+                contactStatus = "Connected on Linko"
+            )
+            contactDao.insertContact(autoContact)
+        } else if (matchedContact != null && !isGenericPlaceholderName(peerDisplayName, me.displayName, myEmailClean) &&
+            isGenericPlaceholderName(matchedContact.contactDisplayName, me.displayName, myEmailClean)
+        ) {
+            contactDao.insertContact(matchedContact.copy(contactDisplayName = peerDisplayName.trim(), contactUserId = resolvedPeerUserId))
+        }
+
+        val allChats = chatDao.getAllChatsList()
+        val peerCandidateTokens = setOf(
+            peerUserId.lowercase().trim(),
+            resolvedPeerUserId.lowercase().trim(),
+            resolvedPeerEmail,
+            matchedContact?.contactUserId?.lowercase()?.trim() ?: "",
+            canonicalParticipantKey(resolvedPeerEmail.ifBlank { resolvedPeerUserId })
+        ).filter { it.isNotBlank() && it != "unknown" }.toSet()
+
+        val myTokens = setOf(
+            me.id.lowercase().trim(),
+            myCanonicalId.lowercase().trim(),
+            myEmailClean
+        ).filter { it.isNotBlank() }.toSet()
+
+        val otherContactsTokens = myContacts
+            .filter { it.id != matchedContact?.id }
+            .flatMap { c ->
+                listOf(
+                    c.contactUserId.lowercase().trim(),
+                    c.contactEmail.lowercase().trim(),
+                    canonicalUserIdFromEmail(c.contactEmail)
+                )
+            }
+            .filter { it.isNotBlank() }
+            .toSet()
+
+        val matchingChats = allChats.filter { chat ->
+            if (chat.isGroup || chat.id == "chat_gemini_ai") return@filter false
+            if (chat.id == canonicalChatId) return@filter true
+            if (!legacyChatIdHint.isNullOrBlank() && chat.id == legacyChatIdHint) return@filter true
+
+            val chatParticipants = parseJsonArray(chat.participantIdsJson).map { it.lowercase().trim() }
+            val nonMeParticipants = chatParticipants.filter { it !in myTokens }
+            val hasPeerParticipant = nonMeParticipants.any { token ->
+                token in peerCandidateTokens || canonicalParticipantKey(token) in peerCandidateTokens
+            }
+            if (hasPeerParticipant) return@filter true
+
+            val chatNameClean = chat.name.trim()
+            val matchesName = !isGenericPlaceholderName(chatNameClean, me.displayName, myEmailClean) && (
+                (matchedContact != null && chatNameClean.equals(matchedContact.contactDisplayName.trim(), ignoreCase = true)) ||
+                (!isGenericPlaceholderName(peerDisplayName, me.displayName, myEmailClean) && chatNameClean.equals(peerDisplayName.trim(), ignoreCase = true)) ||
+                (resolvedPeerEmail.isNotBlank() && chatNameClean.equals(resolvedPeerEmail, ignoreCase = true))
+            )
+            if (matchesName) return@filter true
+
+            // Also catch orphan "Contact" / "Linko Contact" threads that do not belong to any other known contact
+            if (isGenericPlaceholderName(chatNameClean, me.displayName, myEmailClean)) {
+                val belongsToAnotherContact = nonMeParticipants.any { it in otherContactsTokens }
+                if (!belongsToAnotherContact && (myContacts.size <= 1 || nonMeParticipants.isEmpty() || nonMeParticipants.all { it.startsWith("user_") })) {
+                    return@filter true
+                }
+            }
+            false
+        }
+
+        val bestName = sequenceOf(
+            matchedContact?.contactDisplayName,
+            peerDisplayName,
+            matchingChats.map { it.name }.firstOrNull { !isGenericPlaceholderName(it, me.displayName, myEmailClean) },
+            resolvedPeerEmail.takeIf { it.isNotBlank() }?.substringBefore("@")?.replace(".", " ")?.capitalizeWords()
+        ).firstOrNull { !isGenericPlaceholderName(it, me.displayName, myEmailClean) }?.trim()
+            ?: "Linko Contact"
+
+        val bestAvatar = peerAvatarUri
+            ?: matchedContact?.contactAvatarUri
+            ?: matchingChats.firstNotNullOfOrNull { it.groupIconUri }
+
+        // Migrate messages from any duplicate chat IDs into canonicalChatId and delete duplicate ChatEntity rows
+        for (dupChat in matchingChats) {
+            if (dupChat.id != canonicalChatId) {
+                migrateChatMessagesToUnifiedChat(dupChat.id, canonicalChatId)
+                chatDao.deleteChatById(dupChat.id)
+            }
+        }
+
+        val mostRecentExisting = matchingChats.maxByOrNull { it.lastMessageTimestamp }
+        val finalTimestamp = when {
+            incomingTimestamp != null && mostRecentExisting != null -> maxOf(incomingTimestamp, mostRecentExisting.lastMessageTimestamp)
+            incomingTimestamp != null -> incomingTimestamp
+            mostRecentExisting != null -> mostRecentExisting.lastMessageTimestamp
+            else -> System.currentTimeMillis()
+        }
+        val finalLastMessage = when {
+            incomingPreview != null && (mostRecentExisting == null || (incomingTimestamp ?: 0L) >= mostRecentExisting.lastMessageTimestamp) -> incomingPreview
+            mostRecentExisting != null && mostRecentExisting.lastMessageText.isNotBlank() -> mostRecentExisting.lastMessageText
+            incomingPreview != null -> incomingPreview
+            else -> "Chat started"
+        }
+        val baseUnread = matchingChats.maxOfOrNull { it.unreadCount } ?: 0
+        val finalUnread = if (incrementUnread) baseUnread + 1 else baseUnread
+
+        val combinedParticipants = buildList {
+            add(me.id)
+            add(myCanonicalId)
+            if (myEmailClean.isNotBlank()) add(myEmailClean)
+            add(resolvedPeerUserId)
+            if (peerUserId.isNotBlank()) add(peerUserId)
+            if (matchedContact != null && matchedContact.contactUserId.isNotBlank()) add(matchedContact.contactUserId)
+            if (resolvedPeerEmail.isNotBlank()) add(resolvedPeerEmail)
+        }.filter { it.isNotBlank() }.distinct()
+
+        val unifiedChat = ChatEntity(
+            id = canonicalChatId,
+            isGroup = false,
+            name = bestName,
+            groupIconUri = bestAvatar,
+            participantIdsJson = toJsonArray(combinedParticipants),
+            lastMessageText = finalLastMessage,
+            lastMessageTimestamp = finalTimestamp,
+            unreadCount = finalUnread
+        )
+        chatDao.insertOrUpdateChat(unifiedChat)
+        return unifiedChat
+    }
+
+    private suspend fun migrateChatMessagesToUnifiedChat(oldChatId: String, newChatId: String) {
+        if (oldChatId == newChatId) return
+        val oldMessages = messageDao.getMessagesForChatList(oldChatId)
+        for (msg in oldMessages) {
+            val plain = EncryptionManager.decrypt(msg.text, oldChatId)
+            val reEncrypted = EncryptionManager.encrypt(plain, newChatId)
+            messageDao.insertMessage(msg.copy(chatId = newChatId, text = reEncrypted))
+        }
+    }
+
+    suspend fun deduplicateAndUnifyDirectChats(me: UserEntity) {
+        try {
+            val myEmailClean = me.email.lowercase().trim()
+            val myContacts = if (myEmailClean.isNotBlank()) contactDao.getContactsList(myEmailClean) else emptyList()
+            for (contact in myContacts) {
+                if (contact.contactUserId == "user_gemini" || contact.contactEmail.contains("gemini")) continue
+                val allChats = chatDao.getAllChatsList()
+                val canonicalId = generateDirectChatId(me.id, myEmailClean, contact.contactUserId, contact.contactEmail)
+                val hasAnyThreadForContact = allChats.any { chat ->
+                    !chat.isGroup && chat.id != "chat_gemini_ai" && (
+                        chat.id == canonicalId ||
+                        chat.name.equals(contact.contactDisplayName, ignoreCase = true) ||
+                        parseJsonArray(chat.participantIdsJson).any {
+                            it.equals(contact.contactUserId, ignoreCase = true) ||
+                            it.equals(contact.contactEmail, ignoreCase = true) ||
+                            canonicalParticipantKey(it) == canonicalParticipantKey(contact.contactEmail.ifBlank { contact.contactUserId })
+                        } ||
+                        isGenericPlaceholderName(chat.name, me.displayName, myEmailClean)
+                    )
+                }
+                if (hasAnyThreadForContact) {
+                    resolveAndUnifyDirectChat(
+                        me = me,
+                        peerUserId = contact.contactUserId,
+                        peerEmail = contact.contactEmail,
+                        peerDisplayName = contact.contactDisplayName,
+                        peerAvatarUri = contact.contactAvatarUri
+                    )
+                }
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun findMatchingContactForPeer(
+        contacts: List<ContactEntity>,
+        peerUserId: String,
+        peerEmail: String,
+        peerDisplayName: String,
+        me: UserEntity?
+    ): ContactEntity? {
+        val cleanEmail = peerEmail.lowercase().trim()
+        val cleanId = peerUserId.lowercase().trim()
+        val peerCanonical = canonicalParticipantKey(cleanEmail.ifBlank { cleanId })
+
+        if (cleanEmail.isNotBlank()) {
+            contacts.find { it.contactEmail.equals(cleanEmail, ignoreCase = true) }?.let { return it }
+        }
+        if (cleanId.isNotBlank()) {
+            contacts.find {
+                it.contactUserId.equals(cleanId, ignoreCase = true) ||
+                canonicalParticipantKey(it.contactEmail.ifBlank { it.contactUserId }) == peerCanonical
+            }?.let { return it }
+        }
+        if (!isGenericPlaceholderName(peerDisplayName, me?.displayName, me?.email)) {
+            contacts.find { it.contactDisplayName.equals(peerDisplayName.trim(), ignoreCase = true) }?.let { return it }
+        }
+        val nonGeminiContacts = contacts.filter { it.contactUserId != "user_gemini" && !it.contactEmail.contains("gemini") }
+        if (nonGeminiContacts.size == 1 && isGenericPlaceholderName(peerDisplayName, me?.displayName, me?.email)) {
+            return nonGeminiContacts.first()
+        }
+        return null
+    }
+
+    private fun deduplicateChatsList(
+        chatList: List<ChatEntity>,
+        me: UserEntity?,
+        contacts: List<ContactEntity>
+    ): List<ChatEntity> {
+        if (chatList.isEmpty()) return emptyList()
+        val myId = me?.id?.lowercase()?.trim() ?: ""
+        val myEmail = me?.email?.lowercase()?.trim() ?: ""
+        val myCanonical = if (myEmail.isNotBlank()) canonicalUserIdFromEmail(myEmail, myId) else myId
+
+        return chatList
+            .groupBy { chat ->
+                if (chat.isGroup || chat.id == "chat_gemini_ai") {
+                    chat.id
+                } else {
+                    val participants = parseJsonArray(chat.participantIdsJson)
+                        .map { it.lowercase().trim() }
+                        .filter { it.isNotBlank() && it != myId && it != myEmail && it != myCanonical }
+
+                    val matchedContact = contacts.find { c ->
+                        val cEmail = c.contactEmail.lowercase().trim()
+                        val cId = c.contactUserId.lowercase().trim()
+                        val cKey = canonicalParticipantKey(cEmail.ifBlank { cId })
+                        participants.any { p -> p == cId || p == cEmail || canonicalParticipantKey(p) == cKey } ||
+                            generateDirectChatId(myId, myEmail, cId, cEmail) == chat.id ||
+                            (!isGenericPlaceholderName(chat.name, me?.displayName, myEmail) &&
+                                c.contactDisplayName.equals(chat.name.trim(), ignoreCase = true))
+                    } ?: run {
+                        val nonGemini = contacts.filter { it.contactUserId != "user_gemini" && !it.contactEmail.contains("gemini") }
+                        if (nonGemini.size == 1 && isGenericPlaceholderName(chat.name, me?.displayName, myEmail)) {
+                            nonGemini.first()
+                        } else null
+                    }
+
+                    when {
+                        matchedContact != null -> {
+                            "direct_" + canonicalParticipantKey(matchedContact.contactEmail.ifBlank { matchedContact.contactUserId })
+                        }
+                        participants.isNotEmpty() -> {
+                            val emailToken = participants.firstOrNull { it.contains("@") }
+                            "direct_" + canonicalParticipantKey(emailToken ?: participants.first())
+                        }
+                        else -> {
+                            "direct_name_" + chat.name.lowercase().trim()
+                        }
+                    }
+                }
+            }
+            .map { (_, duplicates) ->
+                if (duplicates.size == 1) {
+                    val single = duplicates.first()
+                    if (!single.isGroup && single.id != "chat_gemini_ai") {
+                        val matchedContact = findMatchingContactForPeer(
+                            contacts = contacts,
+                            peerUserId = parseJsonArray(single.participantIdsJson).firstOrNull { it != me?.id } ?: "",
+                            peerEmail = parseJsonArray(single.participantIdsJson).firstOrNull { it.contains("@") && !it.equals(myEmail, ignoreCase = true) } ?: "",
+                            peerDisplayName = single.name,
+                            me = me
+                        )
+                        if (matchedContact != null && isGenericPlaceholderName(single.name, me?.displayName, myEmail)) {
+                            single.copy(
+                                name = matchedContact.contactDisplayName,
+                                groupIconUri = single.groupIconUri ?: matchedContact.contactAvatarUri
+                            )
+                        } else {
+                            single
+                        }
+                    } else {
+                        single
+                    }
+                } else {
+                    val latest = duplicates.maxByOrNull { it.lastMessageTimestamp } ?: duplicates.first()
+                    val bestNamed = duplicates.firstOrNull { !isGenericPlaceholderName(it.name, me?.displayName, myEmail) }
+                    val canonicalIdCandidate = if (me != null) {
+                        val matchedContact = bestNamed?.let {
+                            findMatchingContactForPeer(contacts, "", "", it.name, me)
+                        } ?: findMatchingContactForPeer(contacts, "", "", latest.name, me)
+                        if (matchedContact != null) {
+                            generateDirectChatId(me.id, myEmail, matchedContact.contactUserId, matchedContact.contactEmail)
+                        } else null
+                    } else null
+
+                    val preferredChat = duplicates.find { it.id == canonicalIdCandidate }
+                        ?: bestNamed
+                        ?: latest
+
+                    preferredChat.copy(
+                        name = bestNamed?.name ?: preferredChat.name,
+                        groupIconUri = bestNamed?.groupIconUri ?: latest.groupIconUri,
+                        lastMessageText = latest.lastMessageText,
+                        lastMessageTimestamp = latest.lastMessageTimestamp,
+                        unreadCount = duplicates.maxOf { it.unreadCount }
+                    )
+                }
+            }
+            .sortedByDescending { it.lastMessageTimestamp }
     }
 
     fun stopChatReceiptSync(chatId: String) {
@@ -780,11 +1571,20 @@ class LinkoRepository(
         latitude: Double,
         longitude: Double
     ) {
+        val isLive = title.startsWith("🔴 Live Location", ignoreCase = true) ||
+                title.contains("Live GPS", ignoreCase = true)
+        val googleMapsUrl = com.example.data.remote.SharedMapLocation.buildGoogleMapsSearchUrl(
+            latitude,
+            longitude,
+            title
+        )
         val locObj = JSONObject()
         locObj.put("title", title)
         locObj.put("address", address)
         locObj.put("latitude", latitude)
         locObj.put("longitude", longitude)
+        locObj.put("isLiveLocation", isLive)
+        locObj.put("googleMapsUrl", googleMapsUrl)
 
         sendMessage(
             chatId = chatId,
@@ -842,20 +1642,37 @@ class LinkoRepository(
                 participants.add(it.contactUserId)
             }
         }
-        val updated = chat.copy(participantIdsJson = toJsonArray(participants))
+        val names = newContacts.joinToString { it.contactDisplayName }
+        val now = System.currentTimeMillis()
+        val updated = chat.copy(
+            participantIdsJson = toJsonArray(participants),
+            lastMessageText = "${actor.displayName} invited $names",
+            lastMessageTimestamp = now
+        )
         chatDao.insertOrUpdateChat(updated)
 
-        val names = newContacts.joinToString { it.contactDisplayName }
+        val channelType = if (chat.id.startsWith("channel_")) "CHANNEL" else "GROUP"
+        FirestoreGroupService.inviteContactsToGroup(
+            chat = updated,
+            inviter = actor,
+            invitedContacts = newContacts,
+            channelType = channelType
+        )
+
+        val plainNotice = "👥 ${actor.displayName} invited $names to the conversation."
         val sysMsg = MessageEntity(
             id = "m_${UUID.randomUUID().toString().take(8)}",
             chatId = chatId,
             senderId = actor.id,
             senderName = "System",
             senderEmail = actor.email,
-            text = "👥 ${actor.displayName} added $names to the group.",
-            timestamp = System.currentTimeMillis()
+            text = EncryptionManager.encrypt(plainNotice, chatId),
+            timestamp = now,
+            isEncrypted = true,
+            encryptionAlgorithm = "AES-256-GCM"
         )
         messageDao.insertMessage(sysMsg)
+        FirestoreMessageService.uploadMessage(sysMsg, participants)
     }
 
     suspend fun toggleAdminRole(chatId: String, targetUserId: String, makeAdmin: Boolean) {
@@ -868,6 +1685,7 @@ class LinkoRepository(
         }
         val updated = chat.copy(adminIdsJson = toJsonArray(admins))
         chatDao.insertOrUpdateChat(updated)
+        FirestoreGroupService.syncGroupMembership(updated)
     }
 
     suspend fun removeGroupMember(chatId: String, targetUserId: String) {
@@ -881,6 +1699,7 @@ class LinkoRepository(
             adminIdsJson = toJsonArray(admins)
         )
         chatDao.insertOrUpdateChat(updated)
+        FirestoreGroupService.syncGroupMembership(updated)
     }
 
     private fun parseJsonArray(jsonStr: String): MutableList<String> {

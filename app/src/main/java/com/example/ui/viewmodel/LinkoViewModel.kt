@@ -49,7 +49,13 @@ class LinkoViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     val authState: StateFlow<AuthState> = currentUser
-        .map { user -> if (user != null) AuthState.Authenticated(user) else AuthState.Unauthenticated }
+        .map { user ->
+            if (user != null && user.email != "guest@linko.app" && user.id != "user_guest_local") {
+                AuthState.Authenticated(user)
+            } else {
+                AuthState.Unauthenticated
+            }
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AuthState.Unauthenticated)
 
     val chats: StateFlow<List<ChatEntity>> = repository.allChatsFlow
@@ -231,15 +237,95 @@ class LinkoViewModel(application: Application) : AndroidViewModel(application) {
     private val _onlineUserEmails = MutableStateFlow<Set<String>>(setOf("gemini_ai@google.com", "gemini.ai@google.com"))
     val onlineUserEmails: StateFlow<Set<String>> = _onlineUserEmails.asStateFlow()
 
+    private val _isAppInForeground = MutableStateFlow(true)
+    private val _pendingNotificationIntent = MutableStateFlow<Intent?>(null)
+    val pendingNotificationIntent: StateFlow<Intent?> = _pendingNotificationIntent.asStateFlow()
+
+    private val _pendingSharedContent = MutableStateFlow<SharedIncomingContent?>(null)
+    val pendingSharedContent: StateFlow<SharedIncomingContent?> = _pendingSharedContent.asStateFlow()
+
+    private val _fcmToken = MutableStateFlow(
+        com.example.notification.LinkoFirebaseMessagingService.getSavedToken(application) ?: "Initializing FCM..."
+    )
+    val fcmToken: StateFlow<String> = _fcmToken.asStateFlow()
+
+    private val _isFirebaseAuthenticated = MutableStateFlow(
+        com.example.data.remote.FirestoreProvider.isAuthenticated()
+    )
+
+    private val firebaseAuthListener = com.google.firebase.auth.FirebaseAuth.AuthStateListener { auth ->
+        _isFirebaseAuthenticated.value = auth.currentUser != null
+    }
+
     init {
+        try {
+            com.google.firebase.auth.FirebaseAuth.getInstance().addAuthStateListener(firebaseAuthListener)
+        } catch (_: Throwable) {}
+
+        com.example.notification.LinkoFirebaseMessagingService.initializeFcmAndRegisterToken(application) { token ->
+            _fcmToken.value = token
+        }
+
         viewModelScope.launch {
             repository.seedSampleDataIfEmpty()
+            val fbUser = try {
+                com.google.firebase.auth.FirebaseAuth.getInstance().currentUser
+            } catch (_: Throwable) {
+                null
+            }
+            if (fbUser != null && !fbUser.email.isNullOrBlank()) {
+                prefs.edit().remove("is_guest_mode").remove("guest_display_name").apply()
+                val email = fbUser.email ?: ""
+                val displayName = fbUser.displayName ?: email.substringBefore("@")
+                val username = email.substringBefore("@").replace(".", "_")
+                repository.registerOrLogin(email, displayName, username)
+            } else {
+                prefs.edit().remove("is_guest_mode").remove("guest_display_name").apply()
+                repository.logout()
+            }
         }
         viewModelScope.launch {
-            currentUser.collect { user ->
-                if (user != null) {
-                    repository.syncContactsWithFirestore(user.email)
+            combine(currentUser, _isFirebaseAuthenticated) { user, isFbAuth ->
+                Pair(user, isFbAuth)
+            }.collect { (user, isFbAuth) ->
+                if (user != null && isFbAuth) {
+                    com.example.notification.LinkoFirebaseMessagingService.initializeFcmAndRegisterToken(
+                        context = getApplication(),
+                        userEmail = user.email
+                    ) { token ->
+                        _fcmToken.value = token
+                    }
+
+                    repository.syncContactsWithFirestore(user.email) { newContact ->
+                        com.example.notification.NotificationHelper.showFriendRequestNotification(
+                            context = getApplication(),
+                            requesterName = newContact.contactDisplayName,
+                            requesterEmail = newContact.contactEmail
+                        )
+                    }
+                    repository.syncGroupsWithFirestore(user)
+                    repository.syncMessagesWithFirestore(user) { incomingMessage, plainPreview, isGroupChat ->
+                        val isCurrentlyViewingThisChat = _isAppInForeground.value && _selectedChatId.value == incomingMessage.chatId
+                        if (!isCurrentlyViewingThisChat) {
+                            com.example.notification.NotificationHelper.showNewMessageNotification(
+                                context = getApplication(),
+                                chatId = incomingMessage.chatId,
+                                senderName = incomingMessage.senderName.ifBlank { "Linko Contact" },
+                                messageText = plainPreview,
+                                isGroup = isGroupChat,
+                                senderEmail = incomingMessage.senderEmail
+                            )
+                        }
+                    }
                     com.example.data.remote.FirestorePresenceService.updatePresence(user.email, user.id, true)
+                    com.example.data.remote.FirestorePresenceService.startListeningToPresence(viewModelScope) { onlineSet ->
+                        _onlineUserEmails.value = onlineSet
+                    }
+                } else {
+                    com.example.data.remote.FirestorePresenceService.stopListening()
+                    com.example.data.remote.FirestoreContactService.stopRealtimeSync()
+                    com.example.data.remote.FirestoreGroupService.stopRealtimeGroupSync()
+                    com.example.data.remote.FirestoreMessageService.stopListening()
                 }
             }
         }
@@ -251,12 +337,124 @@ class LinkoViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
         }
-        com.example.data.remote.FirestorePresenceService.startListeningToPresence(viewModelScope) { onlineSet ->
-            _onlineUserEmails.value = onlineSet
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        try {
+            com.google.firebase.auth.FirebaseAuth.getInstance().removeAuthStateListener(firebaseAuthListener)
+        } catch (_: Throwable) {}
+        com.example.data.remote.FirestorePresenceService.stopListening()
+    }
+
+    fun enqueueNotificationIntent(intent: Intent?) {
+        if (intent == null) return
+        handleIncomingShareIntent(intent)
+        val hasNotifExtras = intent.hasExtra(com.example.notification.NotificationHelper.EXTRA_SCREEN) ||
+            intent.hasExtra("extra_direct_reply_chat_id") ||
+            intent.hasExtra("extra_accept_friend_email") ||
+            intent.hasExtra("extra_decline_call") ||
+            intent.action == com.example.notification.NotificationHelper.ACTION_ANSWER_CALL
+        if (hasNotifExtras) {
+            _pendingNotificationIntent.value = intent
+        }
+    }
+
+    /**
+     * Extracts shared text/URLs when Linko is chosen from the Android system Share Sheet
+     * (Intent.ACTION_SEND with mimeType text/plain from apps like YouTube, Instagram, Chrome, etc.).
+     */
+    fun handleIncomingShareIntent(intent: Intent?) {
+        if (intent == null) return
+        if (intent.action == Intent.ACTION_SEND && intent.type?.startsWith("text/") == true) {
+            val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()
+                ?: intent.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.text?.toString()?.trim()
+                ?: ""
+            val sharedSubject = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.trim()?.takeIf { it.isNotBlank() }
+                ?: intent.getStringExtra(Intent.EXTRA_TITLE)?.trim()?.takeIf { it.isNotBlank() }
+
+            if (sharedText.isNotBlank()) {
+                _pendingSharedContent.value = SharedIncomingContent(
+                    sharedText = sharedText,
+                    sharedSubject = sharedSubject,
+                    sourceMimeType = intent.type ?: "text/plain"
+                )
+                // Clear intent extras/action so configuration changes don't re-trigger the share sheet
+                intent.removeExtra(Intent.EXTRA_TEXT)
+                intent.removeExtra(Intent.EXTRA_SUBJECT)
+                intent.action = null
+            }
+        }
+    }
+
+    fun clearPendingSharedContent() {
+        _pendingSharedContent.value = null
+    }
+
+    fun sendSharedContentToRecipients(
+        finalMessageText: String,
+        selectedContacts: List<ContactEntity>,
+        selectedChatIds: List<String>,
+        onCompleteNavigateToChat: (String) -> Unit
+    ) {
+        val textToSend = finalMessageText.trim()
+        if (textToSend.isBlank()) return
+        val sender = currentUser.value ?: return
+
+        viewModelScope.launch {
+            val targetChatIds = mutableListOf<String>()
+
+            // 1. Resolve or create unified direct chats for all selected contacts
+            for (contact in selectedContacts) {
+                val chat = repository.createOrGetDirectChat(sender, contact)
+                if (chat.id !in targetChatIds) {
+                    targetChatIds.add(chat.id)
+                }
+            }
+
+            // 2. Include any directly selected chats (e.g., Groups, Gemini AI)
+            for (chatId in selectedChatIds) {
+                if (chatId !in targetChatIds) {
+                    targetChatIds.add(chatId)
+                }
+            }
+
+            // 3. Dispatch the shared message to every selected recipient chat
+            for (chatId in targetChatIds) {
+                repository.sendMessage(
+                    chatId = chatId,
+                    sender = sender,
+                    text = textToSend
+                )
+            }
+
+            _pendingSharedContent.value = null
+            val firstChatId = targetChatIds.firstOrNull()
+            if (firstChatId != null) {
+                selectChat(firstChatId)
+                val countLabel = if (targetChatIds.size == 1) "1 conversation" else "${targetChatIds.size} conversations"
+                _actionStatusMessage.value = "Shared link/text sent to $countLabel!"
+                onCompleteNavigateToChat(firstChatId)
+            }
+        }
+    }
+
+    fun consumeNotificationIntent() {
+        _pendingNotificationIntent.value = null
+    }
+
+    fun refreshFcmToken(context: Context) {
+        com.example.notification.LinkoFirebaseMessagingService.initializeFcmAndRegisterToken(
+            context = context,
+            userEmail = currentUser.value?.email
+        ) { token ->
+            _fcmToken.value = token
+            _actionStatusMessage.value = "FCM Registration Token synced & active!"
         }
     }
 
     fun setAppForegroundState(isForeground: Boolean) {
+        _isAppInForeground.value = isForeground
         val user = currentUser.value ?: return
         viewModelScope.launch {
             com.example.data.remote.FirestorePresenceService.updatePresence(user.email, user.id, isForeground)
@@ -282,17 +480,26 @@ class LinkoViewModel(application: Application) : AndroidViewModel(application) {
         } catch (_: Exception) {
             emptyList()
         }
-        val myId = me?.id ?: ""
-        val otherUserId = participantIds.find { it != myId }
+        val myId = me?.id?.lowercase()?.trim() ?: ""
+        val myEmail = me?.email?.lowercase()?.trim() ?: ""
+        val myCanonical = if (myEmail.isNotBlank()) LinkoRepository.canonicalUserIdFromEmail(myEmail, myId) else myId
 
-        if (otherUserId != null) {
-            val match = contacts.value.find { it.contactUserId == otherUserId }
-            if (match != null) return match
-        }
-        return contacts.value.find {
-            "chat_${it.contactUserId}" == chat.id ||
-            it.contactDisplayName.equals(chat.name, ignoreCase = true) ||
-            it.contactEmail.equals(chat.name, ignoreCase = true)
+        val otherTokens = participantIds
+            .map { it.lowercase().trim() }
+            .filter { it.isNotBlank() && it != myId && it != myEmail && it != myCanonical }
+
+        return contacts.value.find { c ->
+            val cId = c.contactUserId.lowercase().trim()
+            val cEmail = c.contactEmail.lowercase().trim()
+            val cKey = LinkoRepository.canonicalParticipantKey(cEmail.ifBlank { cId })
+            otherTokens.any { token ->
+                token == cId || token == cEmail || LinkoRepository.canonicalParticipantKey(token) == cKey
+            } ||
+            LinkoRepository.generateDirectChatId(myId, myEmail, cId, cEmail) == chat.id ||
+            "chat_${c.contactUserId}" == chat.id ||
+            (!LinkoRepository.isGenericPlaceholderName(chat.name, me?.displayName, myEmail) &&
+                (c.contactDisplayName.equals(chat.name.trim(), ignoreCase = true) ||
+                    c.contactEmail.equals(chat.name.trim(), ignoreCase = true)))
         }
     }
 
@@ -308,6 +515,7 @@ class LinkoViewModel(application: Application) : AndroidViewModel(application) {
     fun loginOrRegister(email: String, displayName: String, username: String) {
         viewModelScope.launch {
             try {
+                prefs.edit().remove("is_guest_mode").remove("guest_display_name").apply()
                 repository.registerOrLogin(email, displayName, username)
                 _actionStatusMessage.value = "Welcome back!"
             } catch (e: Exception) {
@@ -318,6 +526,7 @@ class LinkoViewModel(application: Application) : AndroidViewModel(application) {
 
     fun logout() {
         viewModelScope.launch {
+            prefs.edit().remove("is_guest_mode").remove("guest_display_name").apply()
             repository.logout()
             _selectedChatId.value = null
         }
@@ -332,11 +541,24 @@ class LinkoViewModel(application: Application) : AndroidViewModel(application) {
         val me = currentUser.value
         viewModelScope.launch {
             if (me != null) {
-                repository.markChatMessagesAsRead(chatId, me.id, me.email)
-                repository.startChatReceiptSync(chatId, me.id)
+                repository.clearChatUnread(chatId)
+                repository.startChatReceiptSync(chatId, me.id, me.email)
             } else {
                 repository.clearChatUnread(chatId)
             }
+        }
+    }
+
+    fun markVisibleMessagesAsRead(chatId: String, visibleMessageIds: List<String>) {
+        if (visibleMessageIds.isEmpty()) return
+        val me = currentUser.value ?: return
+        viewModelScope.launch {
+            repository.markVisibleMessagesAsRead(
+                chatId = chatId,
+                currentUserId = me.id,
+                currentUserEmail = me.email,
+                visibleMessageIds = visibleMessageIds
+            )
         }
     }
 
@@ -402,7 +624,7 @@ class LinkoViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val me = currentUser.value ?: return@launch
             val chat = repository.createOrGetDirectChat(me, contact)
-            _selectedChatId.value = chat.id
+            selectChat(chat.id)
             onChatReady(chat.id)
         }
     }
@@ -410,19 +632,24 @@ class LinkoViewModel(application: Application) : AndroidViewModel(application) {
     fun openOrCreateDirectChat(userId: String, email: String, name: String, onChatReady: () -> Unit) {
         viewModelScope.launch {
             val me = currentUser.value ?: return@launch
-            var contact = contacts.value.find { it.contactUserId == userId || it.contactEmail.equals(email, ignoreCase = true) }
+            val canonicalId = LinkoRepository.canonicalUserIdFromEmail(email, userId)
+            var contact = contacts.value.find {
+                it.contactUserId == userId ||
+                it.contactUserId == canonicalId ||
+                (email.isNotBlank() && it.contactEmail.equals(email, ignoreCase = true))
+            }
             if (contact == null) {
                 contact = ContactEntity(
-                    id = "contact_$userId",
-                    userEmail = me.email,
-                    contactUserId = userId,
-                    contactEmail = email,
+                    id = "c_${LinkoRepository.canonicalParticipantKey(email.ifBlank { canonicalId })}",
+                    userEmail = me.email.lowercase().trim(),
+                    contactUserId = canonicalId,
+                    contactEmail = email.lowercase().trim(),
                     contactDisplayName = name,
                     contactUsername = email.substringBefore("@")
                 )
             }
             val chat = repository.createOrGetDirectChat(me, contact)
-            _selectedChatId.value = chat.id
+            selectChat(chat.id)
             onChatReady()
         }
     }
@@ -431,17 +658,24 @@ class LinkoViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val me = currentUser.value ?: return@launch
             val chat = repository.createOrGetGeminiChat(me)
-            _selectedChatId.value = chat.id
+            selectChat(chat.id)
             onChatReady(chat.id)
         }
     }
 
-    fun createGroupChat(groupName: String, selectedContacts: List<ContactEntity>, groupDesc: String, onDone: (String) -> Unit) {
+    fun createGroupChat(
+        groupName: String,
+        selectedContacts: List<ContactEntity>,
+        groupDesc: String,
+        channelType: String = "GROUP",
+        onDone: (String) -> Unit
+    ) {
         viewModelScope.launch {
             val me = currentUser.value ?: return@launch
-            val group = repository.createGroupChat(me, groupName, selectedContacts, groupDesc)
-            _selectedChatId.value = group.id
-            _actionStatusMessage.value = "Group '$groupName' created!"
+            val group = repository.createGroupChat(me, groupName, selectedContacts, groupDesc, channelType)
+            selectChat(group.id)
+            val kindLabel = if (channelType.equals("CHANNEL", ignoreCase = true)) "Channel" else "Group"
+            _actionStatusMessage.value = "$kindLabel '$groupName' created (${selectedContacts.size} invited)!"
             onDone(group.id)
         }
     }
@@ -450,7 +684,7 @@ class LinkoViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val me = currentUser.value ?: return@launch
             repository.addGroupMembers(chatId, newContacts, me)
-            _actionStatusMessage.value = "Added members to group"
+            _actionStatusMessage.value = "Invited ${newContacts.size} contact(s) to conversation"
         }
     }
 
@@ -783,6 +1017,73 @@ class LinkoViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun answerIncomingCall(
+        callerName: String,
+        callerEmail: String,
+        callerAvatar: String?,
+        callType: CallType
+    ) {
+        com.example.notification.NotificationHelper.cancelNotification(
+            getApplication(),
+            com.example.notification.NotificationHelper.NOTIFICATION_ID_INCOMING_CALL
+        )
+        com.example.notification.NotificationHelper.cancelNotification(
+            getApplication(),
+            com.example.notification.NotificationHelper.NOTIFICATION_ID_MISSED_CALL
+        )
+
+        val signalingEngine = LinkoCallSignalingEngine.getInstance(getApplication())
+        signalingEngine.initiateCall(
+            peerEmail = callerEmail,
+            peerName = callerName,
+            callType = callType,
+            onCallConnected = { _ ->
+                _activeCallState.value = _activeCallState.value?.copy(
+                    statusText = "Connected • E2EE Secured"
+                )
+            },
+            onCallEnded = { _ ->
+                callTimerJob?.cancel()
+                _activeCallState.value = null
+            }
+        )
+
+        _activeCallState.value = ActiveCallState(
+            contactName = callerName,
+            contactEmail = callerEmail,
+            contactAvatarUri = callerAvatar,
+            callType = callType,
+            isMuted = false,
+            isSpeakerOn = (callType == CallType.VIDEO),
+            isVideoEnabled = (callType == CallType.VIDEO),
+            isFrontCamera = true,
+            callDurationSeconds = 0,
+            statusText = "Connecting Encrypted Call..."
+        )
+
+        callTimerJob?.cancel()
+        callTimerJob = viewModelScope.launch {
+            while (true) {
+                delay(1000)
+                _activeCallState.value = _activeCallState.value?.let {
+                    it.copy(callDurationSeconds = it.callDurationSeconds + 1)
+                } ?: break
+            }
+        }
+
+        viewModelScope.launch {
+            repository.addCallLog(
+                contactName = callerName,
+                contactEmail = callerEmail,
+                contactAvatarUri = callerAvatar,
+                callType = callType,
+                isIncoming = true,
+                isMissed = false,
+                durationSeconds = 0
+            )
+        }
+    }
+
     fun processNotificationIntent(
         intent: Intent,
         context: Context,
@@ -790,10 +1091,21 @@ class LinkoViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         val extraScreen = intent.getStringExtra(com.example.notification.NotificationHelper.EXTRA_SCREEN)
         val extraChatId = intent.getStringExtra(com.example.notification.NotificationHelper.EXTRA_CHAT_ID)
+        val extraSenderName = intent.getStringExtra(com.example.notification.NotificationHelper.EXTRA_SENDER_NAME) ?: ""
+        val extraSenderEmail = intent.getStringExtra(com.example.notification.NotificationHelper.EXTRA_SENDER_EMAIL) ?: ""
+        val extraMessageText = intent.getStringExtra(com.example.notification.NotificationHelper.EXTRA_MESSAGE_TEXT) ?: ""
+        val extraIsGroup = intent.getBooleanExtra(com.example.notification.NotificationHelper.EXTRA_IS_GROUP, false)
         val extraReplyChatId = intent.getStringExtra("extra_direct_reply_chat_id")
         val extraReplyText = intent.getStringExtra("extra_direct_reply_text")
         val extraAcceptEmail = intent.getStringExtra("extra_accept_friend_email")
+        val extraAcceptName = intent.getStringExtra("extra_accept_friend_name") ?: ""
         val extraDeclineCall = intent.getBooleanExtra("extra_decline_call", false)
+
+        // Clear extras from intent so they aren't re-consumed on rotation
+        intent.removeExtra(com.example.notification.NotificationHelper.EXTRA_SCREEN)
+        intent.removeExtra("extra_direct_reply_chat_id")
+        intent.removeExtra("extra_accept_friend_email")
+        intent.removeExtra("extra_decline_call")
 
         // Process Direct Reply from Notification
         if (!extraReplyChatId.isNullOrEmpty() && !extraReplyText.isNullOrEmpty()) {
@@ -801,7 +1113,7 @@ class LinkoViewModel(application: Application) : AndroidViewModel(application) {
             if (user != null) {
                 viewModelScope.launch {
                     repository.sendMessage(extraReplyChatId, user, extraReplyText)
-                    _selectedChatId.value = extraReplyChatId
+                    selectChat(extraReplyChatId)
                     onNavigate(com.example.notification.NotificationHelper.SCREEN_DIRECT_CHAT, extraReplyChatId)
                 }
             }
@@ -813,9 +1125,11 @@ class LinkoViewModel(application: Application) : AndroidViewModel(application) {
             if (me != null) {
                 viewModelScope.launch {
                     repository.addContactByEmail(me.email, extraAcceptEmail)
-                    _actionStatusMessage.value = "Accepted friend request from $extraAcceptEmail"
+                    _actionStatusMessage.value = "Accepted friend request from ${extraAcceptName.ifBlank { extraAcceptEmail }}!"
                     onNavigate(com.example.notification.NotificationHelper.SCREEN_FRIENDS, null)
                 }
+            } else {
+                onNavigate(com.example.notification.NotificationHelper.SCREEN_FRIENDS, null)
             }
         }
 
@@ -829,16 +1143,27 @@ class LinkoViewModel(application: Application) : AndroidViewModel(application) {
             when (extraScreen) {
                 com.example.notification.NotificationHelper.SCREEN_DIRECT_CHAT -> {
                     if (!extraChatId.isNullOrEmpty()) {
-                        selectChat(extraChatId)
-                        onNavigate(com.example.notification.NotificationHelper.SCREEN_DIRECT_CHAT, extraChatId)
+                        viewModelScope.launch {
+                            val ensuredChat = repository.ensureChatForNotification(
+                                chatId = extraChatId,
+                                senderName = extraSenderName,
+                                senderEmail = extraSenderEmail,
+                                messageText = extraMessageText,
+                                isGroup = extraIsGroup,
+                                currentUser = currentUser.value
+                            )
+                            selectChat(ensuredChat.id)
+                            onNavigate(com.example.notification.NotificationHelper.SCREEN_DIRECT_CHAT, ensuredChat.id)
+                        }
                     }
                 }
                 com.example.notification.NotificationHelper.SCREEN_INCOMING_CALL -> {
                     val callerName = intent.getStringExtra(com.example.notification.NotificationHelper.EXTRA_CALLER_NAME) ?: "Caller"
-                    val callerEmail = intent.getStringExtra(com.example.notification.NotificationHelper.EXTRA_CALLER_EMAIL) ?: ""
+                    val callerEmail = intent.getStringExtra(com.example.notification.NotificationHelper.EXTRA_CALLER_EMAIL) ?: "caller@linko.com"
                     val callTypeStr = intent.getStringExtra(com.example.notification.NotificationHelper.EXTRA_CALL_TYPE) ?: "VOICE"
                     val callType = if (callTypeStr.equals("VIDEO", ignoreCase = true)) CallType.VIDEO else CallType.AUDIO
-                    startCall(callerName, callerEmail, null, callType)
+                    val contactAvatar = contacts.value.find { it.contactEmail.equals(callerEmail, ignoreCase = true) }?.contactAvatarUri
+                    answerIncomingCall(callerName, callerEmail, contactAvatar, callType)
                     onNavigate("calls", null)
                 }
                 com.example.notification.NotificationHelper.SCREEN_FRIENDS -> {
@@ -851,50 +1176,72 @@ class LinkoViewModel(application: Application) : AndroidViewModel(application) {
     fun triggerSimulatedMessageNotification(context: Context) {
         viewModelScope.launch {
             val firstChat = chats.value.firstOrNull()
-            if (firstChat == null) {
-                _actionStatusMessage.value = "No active chat found. Add a contact or start a conversation first."
-                return@launch
-            }
-            val chatId = firstChat.id
-            val senderName = firstChat.name
-            val text = "Hey! Let me know if you can see this push notification reply test 🚀"
+            val chatId = firstChat?.id ?: "chat_elena_vance"
+            val senderName = firstChat?.name ?: "Elena Vance"
+            val text = "Hey! Tap this notification to open our chat or reply directly from the notification bar 🚀"
 
-            com.example.notification.NotificationHelper.showNewMessageNotification(
-                context = context,
+            repository.ensureChatForNotification(
                 chatId = chatId,
                 senderName = senderName,
-                messageText = text
+                senderEmail = "elena.vance@linko.com",
+                messageText = text,
+                isGroup = firstChat?.isGroup ?: false,
+                currentUser = currentUser.value
             )
-            _actionStatusMessage.value = "Push notification triggered for Message from $senderName!"
+
+            com.example.notification.LinkoFirebaseMessagingService.dispatchRemotePayload(
+                context = context,
+                data = mapOf(
+                    "type" to "message",
+                    "chat_id" to chatId,
+                    "sender_name" to senderName,
+                    "sender_email" to "elena.vance@linko.com",
+                    "message_text" to text,
+                    "is_group" to (firstChat?.isGroup ?: false).toString()
+                )
+            )
+            _actionStatusMessage.value = "FCM Push notification sent for Message from $senderName!"
         }
     }
 
     fun triggerSimulatedCallNotification(context: Context, isVideo: Boolean = false) {
         val firstContact = contacts.value.firstOrNull()
-        val callerName = firstContact?.contactDisplayName ?: currentUser.value?.displayName ?: "Contact"
-        val callerEmail = firstContact?.contactEmail ?: currentUser.value?.email ?: "contact@linko.com"
+        val callerName = firstContact?.contactDisplayName ?: "Marcus Miller"
+        val callerEmail = firstContact?.contactEmail ?: "marcus.miller@linko.com"
         val callType = if (isVideo) "Video" else "Voice"
 
-        com.example.notification.NotificationHelper.showIncomingCallNotification(
+        com.example.notification.LinkoFirebaseMessagingService.dispatchRemotePayload(
             context = context,
-            callerName = callerName,
-            callerEmail = callerEmail,
-            callType = callType
+            data = mapOf(
+                "type" to "incoming_call",
+                "caller_name" to callerName,
+                "caller_email" to callerEmail,
+                "call_type" to callType
+            )
         )
-        _actionStatusMessage.value = "Push notification triggered for Incoming $callType Call from $callerName!"
+        _actionStatusMessage.value = "FCM Push notification sent for Incoming $callType Call from $callerName!"
     }
 
     fun triggerSimulatedFriendRequestNotification(context: Context) {
-        val requesterName = "New Connection"
-        val requesterEmail = "invite@linko.com"
+        val requesterName = "Sophia Chen"
+        val requesterEmail = "sophia.chen@linko.com"
 
-        com.example.notification.NotificationHelper.showFriendRequestNotification(
+        com.example.notification.LinkoFirebaseMessagingService.dispatchRemotePayload(
             context = context,
-            requesterName = requesterName,
-            requesterEmail = requesterEmail
+            data = mapOf(
+                "type" to "friend_request",
+                "requester_name" to requesterName,
+                "requester_email" to requesterEmail
+            )
         )
-        _actionStatusMessage.value = "Push notification triggered for Friend Request!"
+        _actionStatusMessage.value = "FCM Push notification sent for Friend Request from $requesterName!"
     }
 
 }
+
+data class SharedIncomingContent(
+    val sharedText: String,
+    val sharedSubject: String? = null,
+    val sourceMimeType: String = "text/plain"
+)
 

@@ -1,9 +1,7 @@
 package com.example.ui.components
 
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DoneAll
@@ -14,40 +12,56 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.example.data.local.entity.MessageStatus
 import com.example.ui.theme.Emerald500
 import com.example.ui.theme.StatusReadBlue
 
+private val TickGrayColor = Color(0xFF9CA3AF)
+
+/**
+ * 3-stage WhatsApp-style message receipt indicator:
+ * - 'sent'      -> Single Gray Tick (Message sent from device to server)
+ * - 'delivered' -> Double Gray Tick (Message delivered to recipient's device)
+ * - 'read'      -> Double Blue Tick (Recipient opened the chat and message is visible on screen)
+ */
 @Composable
 fun MessageStatusTicks(
     status: String,
     modifier: Modifier = Modifier,
     iconSize: Dp = 15.dp
 ) {
-    when (status) {
-        "READ" -> {
+    when (MessageStatus.normalize(status)) {
+        MessageStatus.READ -> {
             Icon(
                 imageVector = Icons.Default.DoneAll,
-                contentDescription = "Read",
+                contentDescription = "Read (Double Blue Tick)",
                 tint = StatusReadBlue,
-                modifier = modifier.size(iconSize)
+                modifier = modifier
+                    .size(iconSize)
+                    .testTag("message_tick_read")
             )
         }
-        "DELIVERED" -> {
+        MessageStatus.DELIVERED -> {
             Icon(
                 imageVector = Icons.Default.DoneAll,
-                contentDescription = "Delivered",
-                tint = Color.Gray,
-                modifier = modifier.size(iconSize)
+                contentDescription = "Delivered (Double Gray Tick)",
+                tint = TickGrayColor,
+                modifier = modifier
+                    .size(iconSize)
+                    .testTag("message_tick_delivered")
             )
         }
         else -> {
             Icon(
                 imageVector = Icons.Default.Check,
-                contentDescription = "Sent",
-                tint = Color.Gray,
-                modifier = modifier.size(iconSize)
+                contentDescription = "Sent (Single Gray Tick)",
+                tint = TickGrayColor,
+                modifier = modifier
+                    .size(iconSize)
+                    .testTag("message_tick_sent")
             )
         }
     }
